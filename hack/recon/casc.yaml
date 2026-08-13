@@ -1,0 +1,159 @@
+# Recon instance configuration.
+#
+# Deliberately a MIXED posture: some settings hardened, some not, so a single
+# scan produces PASS and FAIL side by side and we can see which fields carry
+# the difference. The permission split between admin and reader is the point of
+# the whole exercise — it tells us which `available` keys the fetcher needs.
+jenkins:
+  systemMessage: "jenkins-bench recon instance"
+
+  # Two executors on the built-in node: builds run on the controller, which is
+  # the classic Jenkins misconfiguration. A hardened controller has 0.
+  numExecutors: 2
+
+  # Fixed inbound agent port rather than disabled (-1) or random (0).
+  slaveAgentPort: 50000
+
+  # NOTE: `agentProtocols` is rejected by JCasC as deprecated on this LTS.
+  # Modern Jenkins only speaks JNLP4-connect and the setting is gone, so a
+  # control asking "are the legacy agent protocols disabled?" has nothing left
+  # to check. Recorded in the notes rather than configured here.
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${ADMIN_PASSWORD}"
+        - id: "reader"
+          password: "${READER_PASSWORD}"
+
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - user:
+            name: "admin"
+            permissions:
+              - "Overall/Administer"
+        # Deliberately minimal: Overall/Read plus Job/Read. No Job/ExtendedRead,
+        # so this token cannot fetch a job's config.xml — which is exactly the
+        # 403 the fetcher has to turn into MANUAL rather than a verdict.
+        - user:
+            name: "reader"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+
+  # A permanent inbound agent. It will never connect, so it shows up offline —
+  # which is itself worth seeing: the fetcher must not read "offline" as
+  # "absent", and a control about agents has to cope with both.
+  nodes:
+    - permanent:
+        name: "build-agent-1"
+        labelString: "linux docker"
+        numExecutors: 4
+        remoteFS: "/home/jenkins/agent"
+        mode: NORMAL
+        retentionStrategy: "always"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "deploy-user"
+              username: "deployer"
+              password: "notarealsecret"
+              description: "Global deploy credential"
+          - string:
+              scope: GLOBAL
+              id: "npm-token"
+              secret: "notarealtoken"
+              description: "Global npm token"
+
+unclassified:
+  audit-trail:
+    logBuildCause: true
+
+jobs:
+  - script: |
+      folder('platform') {
+        description('Nested folder, so fullName paths get exercised.')
+      }
+  # The good case: pipeline defined as code, pulled from SCM.
+  - script: |
+      pipelineJob('platform/api-service') {
+        description('Jenkinsfile from SCM — the shape 2.3.1 wants.')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('https://github.com/jenkinsci/jenkins.git') }
+                branch('*/master')
+              }
+            }
+            scriptPath('Jenkinsfile')
+            lightweight(true)
+          }
+        }
+        triggers {
+          scm('H/15 * * * *')
+        }
+      }
+  # Inline script, sandbox on.
+  - script: |
+      pipelineJob('platform/inline-deploy') {
+        description('Pipeline script stored in Jenkins, not in SCM.')
+        definition {
+          cps {
+            script('pipeline { agent any; stages { stage("x") { steps { echo "hi" } } } }')
+            sandbox(true)
+          }
+        }
+      }
+  # Inline script, sandbox OFF — arbitrary Groovy on the controller.
+  - script: |
+      pipelineJob('platform/inline-nosandbox') {
+        description('Inline script with the Groovy sandbox disabled.')
+        definition {
+          cps {
+            script('pipeline { agent any; stages { stage("x") { steps { echo "hi" } } } }')
+            sandbox(false)
+          }
+        }
+      }
+  # Freestyle with a remote-trigger token: a shared secret that lives in a URL.
+  - script: |
+      freeStyleJob('legacy-build') {
+        description('Freestyle job — build steps are not code.')
+        label('built-in')
+        authenticationToken('notarealtoken')
+        steps {
+          shell('echo building')
+        }
+      }
+  # Multibranch: expands into one child WorkflowJob per branch. The seed repo is
+  # created inside the container by seed.sh before this boots.
+  - script: |
+      multibranchPipelineJob('platform/multibranch-app') {
+        description('Multibranch — expands into per-branch child jobs.')
+        branchSources {
+          git {
+            id('seed-repo')
+            remote('/var/jenkins_home/seed-repo')
+          }
+        }
+      }
+  - script: |
+      freeStyleJob('disabled-job') {
+        description('Disabled, to check how NA is handled.')
+        disabled(true)
+        steps {
+          shell('echo nothing')
+        }
+      }
