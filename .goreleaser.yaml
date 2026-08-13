@@ -1,0 +1,237 @@
+version: 2
+
+project_name: jenkins-bench
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: jenkins-bench
+    main: ./cmd/jenkins-bench
+    binary: jenkins-bench
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/scm-bench/jenkins-bench/internal/cli.Version={{ .Version }}
+      - -X github.com/scm-bench/jenkins-bench/internal/cli.Commit={{ .FullCommit }}
+      - -X github.com/scm-bench/jenkins-bench/internal/cli.Date={{ .Date }}
+
+archives:
+  - id: jenkins-bench
+    ids: [jenkins-bench]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      # "examples/*", not "examples/**/*": the ** form requires at least one
+      # subdirectory, so it silently matched nothing and shipped archives
+      # without the sample config and snapshot the README tells people to run.
+      - examples/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Every release is reproducible from the archive alone: the policy bundle is
+# embedded in the binary, so there is nothing else to ship alongside it.
+sboms:
+  - artifacts: archive
+
+# Only checksums.txt is signed, not each archive. Every archive's digest is
+# already in that file, so one signature covers the whole release: verify the
+# signature, then verify the archive against the file it vouches for. Signing
+# each artifact separately would produce more signatures asserting the same
+# thing.
+#
+# Keyless, via the OIDC token the release workflow already requests. There is
+# no private key to store, rotate, or leak; the signing identity is the
+# workflow itself, and that identity is what `cosign verify-blob` is told to
+# expect. A signature only proves the release came from this repository's
+# release workflow — that is the claim worth making, and the only one that can
+# be checked without trusting a key someone has to look after.
+# cosign v3 deprecated --output-signature and --output-certificate on sign-blob
+# in favour of a single Sigstore bundle, and now requires --bundle. Without it
+# the signing itself succeeds and the write fails:
+#
+#   Flag --output-signature has been deprecated, please use --bundle ...
+#   Signing artifact...
+#   Error: signing dist/checksums.txt: create bundle file: open : no such file or directory
+#
+# The empty path in that message is the unset --bundle. cosign did say what to
+# do, twice — but goreleaser buffers a signing command's output and only prints
+# it once the command has failed, so the advice and the failure arrive
+# together, after the release has already stopped.
+#
+# This is what broke v0.1.0-rc.3: the tag was pushed, the workflow died here,
+# and the tag was left with no release behind it.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    # goreleaser uploads whatever this names, so the extension has to match
+    # what is actually produced. There is no separate certificate artifact any
+    # more: the bundle contains the signature, the certificate and the
+    # transparency-log entry together.
+    signature: "${artifact}.bundle"
+    output: true
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+
+# The manifest is what `docker pull ghcr.io/scm-bench/jenkins-bench:0.1.0` resolves
+# to, so that is what carries the signature. A release candidate leaves the
+# :latest manifest unpushed (skip_push: auto), and goreleaser only signs
+# artifacts it actually published.
+docker_signs:
+  - cmd: cosign
+    artifacts: manifests
+    output: true
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Release notes are written by hand on the release page. goreleaser builds,
+# signs and uploads; it does not narrate.
+#
+# Grouping commits here contradicted two things the project had already
+# committed to in writing. CONTRIBUTING tells contributors that release notes
+# are grouped by label and that an unlabelled pull request lands under "Other
+# changes" — which was false while this file rendered the body from commit
+# subjects. It also tells them commit messages are plain imperative sentences
+# rather than Conventional Commits, while the grouping regexps depended on
+# exactly those prefixes. Handing the job to .github/release.yml makes both
+# sentences true again.
+#
+# The cost is worth stating: GitHub's generator lists *merged pull requests*,
+# and everything currently lands on main by direct push, so it has nothing to
+# list until that changes. The narrative is the part a person writes anyway.
+changelog:
+  disable: true
+
+# goreleaser reports `dockers`/`docker_manifests` as being phased out in favour
+# of `dockers_v2`. The migration is deferred rather than done blind: dockers_v2
+# builds every platform from one buildx invocation, which changes how the binary
+# is laid out in the build context and therefore what Dockerfile.goreleaser has
+# to copy. That contract needs an actual image build to verify, so it should be
+# migrated in a change where the release workflow runs end to end.
+dockers:
+  - id: jenkins-bench-amd64
+    ids: [jenkins-bench]
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    image_templates:
+      - "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.description=Audit source control platforms against the CIS Software Supply Chain Security benchmark"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+  - id: jenkins-bench-arm64
+    ids: [jenkins-bench]
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    image_templates:
+      - "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.description=Audit source control platforms against the CIS Software Supply Chain Security benchmark"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+docker_manifests:
+  # Both manifests point at the same per-architecture images; a manifest does
+  # not need its own set of tags, so there are no separate latest-amd64 /
+  # latest-arm64 images to keep in step.
+  - name_template: "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}-amd64"
+      - "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}-arm64"
+
+  - name_template: "ghcr.io/scm-bench/jenkins-bench:latest"
+    image_templates:
+      - "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}-amd64"
+      - "ghcr.io/scm-bench/jenkins-bench:{{ .Version }}-arm64"
+    # "auto" skips this manifest when the tag carries a prerelease part, so a
+    # release candidate never becomes what `docker pull` returns by default.
+    # Go's @latest already excludes prereleases; Docker has no such notion, so
+    # without this a v0.1.0-rc.1 tag would silently hand an unvalidated build
+    # to anyone pulling the bare image name.
+    skip_push: auto
+
+release:
+  # Releases are created as drafts: goreleaser builds and uploads every
+  # artifact, then waits for a human to publish. Nothing about a release is
+  # reversible once it is public — the tag is fetched by proxies, and a
+  # deleted GitHub release does not un-publish a module version — so the
+  # artifacts get looked at before anyone can install them.
+  draft: true
+  # A tag carrying a prerelease part (v0.1.0-rc.1) is marked as a prerelease
+  # automatically. This matters beyond labelling: Go's @latest resolves to the
+  # newest *release* version, so a prerelease has to be asked for by name.
+  prerelease: auto
+  # The two fastest ways in, pinned to this exact version. `:latest` is
+  # deliberately absent: a prerelease never becomes it (skip_push: auto below),
+  # so naming it here would hand someone the wrong image.
+  header: |
+    `jenkins-bench` audits a source control platform against the Source Code section
+    of the CIS Software Supply Chain Security Guide.
+
+    ```bash
+    go install github.com/scm-bench/jenkins-bench/cmd/jenkins-bench@{{ .Tag }}
+    docker pull ghcr.io/scm-bench/jenkins-bench:{{ .Version }}
+    ```
+  footer: |
+    ## Verifying
+
+    ```bash
+    # 1. the archives match the checksum file.
+    #    --ignore-missing because checksums.txt lists every platform and you
+    #    downloaded one. On macOS: shasum -a 256 --ignore-missing -c checksums.txt
+    sha256sum --ignore-missing -c checksums.txt
+
+    # 2. the checksum file came from this repository's release workflow
+    cosign verify-blob checksums.txt --bundle checksums.txt.bundle \
+      --certificate-identity-regexp '^https://github\.com/scm-bench/jenkins-bench/\.github/workflows/release\.yml@' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+    # 3. the container image, same signing identity
+    cosign verify ghcr.io/scm-bench/jenkins-bench:{{ .Version }} \
+      --certificate-identity-regexp '^https://github\.com/scm-bench/jenkins-bench/\.github/workflows/release\.yml@' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+    # 4. what commit and workflow built an archive
+    gh attestation verify jenkins-bench_{{ .Version }}_linux_amd64.tar.gz --repo scm-bench/jenkins-bench
+    ```
+
+    The two `--certificate-*` flags are the point of the cosign commands: without
+    them cosign confirms only that *somebody* signed the file. Each archive also
+    ships an SPDX SBOM (`*.sbom.json`), covered by the same checksum file.

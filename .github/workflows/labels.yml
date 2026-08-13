@@ -1,0 +1,64 @@
+name: Labels
+
+# Labels are not cosmetic here: .github/release.yml groups the release notes by
+# label, so a label that does not exist means a category that silently never
+# fills. Keeping them in a file makes that reviewable instead of something
+# somebody clicked once.
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/labels.json"]
+  workflow_dispatch:
+
+# Declaring a permissions block zeroes every permission not listed, including
+# the contents: read that checkout needs — the first run failed with
+# "Repository not found" for exactly that reason.
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync labels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Apply labels.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # jq rather than a YAML parser: it ships on the runner image, so this
+          # depends on nothing that has to be installed first.
+          jq -e 'type == "array" and length > 0' .github/labels.json > /dev/null
+
+          jq -r '.[] | [.name, .color, .description] | @tsv' .github/labels.json |
+            while IFS=$'\t' read -r name color description; do
+              # --force updates a label that already exists, which covers the
+              # defaults GitHub creates with every repository.
+              gh label create "$name" \
+                --color "$color" \
+                --description "$description" \
+                --force
+              echo "  $name"
+            done
+
+      - name: Report labels not in the file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Deliberately reports rather than deletes: removing a label strips it
+          # from every issue that carries it, which is not something a routine
+          # sync should do silently.
+          comm -23 \
+            <(gh label list --limit 200 --json name --jq '.[].name' | sort) \
+            <(jq -r '.[].name' .github/labels.json | sort) \
+            | sed 's/^/  not in labels.json: /'

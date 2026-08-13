@@ -1,0 +1,100 @@
+name: Links
+
+# Every control ships remediation text and a `references` list, and those links
+# are the part a user actually clicks when a control fires. They rot silently:
+# jenkins.io reorganises its documentation and plugin pages move or are archived
+# when a plugin is deprecated, so a URL that worked at authoring time can 404 a
+# year later with nothing in this repository having changed. That is how the
+# CIS-1.1.9 link broke — it was found by a user, not by us.
+#
+# Runs on a schedule because there is no commit to hang it on, and on pull
+# requests that touch the files carrying URLs.
+on:
+  schedule:
+    # Weekly, Monday 04:17 UTC. Off the hour on purpose: scheduled jobs at :00
+    # queue behind everyone else's cron.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/checks/policies/**/metadata.json"
+      - "internal/report/sarif.go"
+      - ".github/workflows/links.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: links-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Reference URLs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Collect the URLs the tool hands to users
+        run: |
+          # Tests are excluded because their URLs are fixtures, not references.
+          # `https://confluence.atlassian.com/x` is a stand-in in a table that
+          # asserts a vendor page outranks the CIS one; it is not a page and was
+          # never meant to resolve. Sweeping it in failed the job for a reason
+          # no reader of a report could ever encounter — which is the failure
+          # mode this job exists to avoid, pointed at itself.
+          grep -rhoE 'https://[^"[:space:]]+' \
+            --exclude='*_test.go' --exclude='*_test.rego' \
+            internal/checks/policies internal/report \
+            | sed 's/[.,)]*$//' \
+            | grep -vE 'example\.(com|invalid)' \
+            | sort -u > urls.txt
+          echo "Found $(wc -l < urls.txt) distinct URLs:"
+          cat urls.txt
+
+      - name: Check each one resolves
+        run: |
+          # The distinction below is the same one the tool itself makes, and it
+          # matters for the same reason. A 404 is a fact: the page is gone, and
+          # the reference is wrong. A 403 or 429 is a host declining to talk to
+          # a CI runner, which says nothing about whether the page exists —
+          # failing on it would train everyone to ignore this job, which is
+          # exactly how the broken link survived in the first place.
+          #
+          # So: 404/410 and 5xx fail the build. Anything unverifiable is
+          # reported as a warning and left for a human.
+          broken=0
+          unverified=0
+
+          while read -r url; do
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' \
+                     --retry 3 --retry-delay 2 --retry-all-errors \
+                     --max-time 30 \
+                     -A 'jenkins-bench-link-check (+https://github.com/scm-bench/jenkins-bench)' \
+                     "$url" || echo 000)
+
+            case "$code" in
+              2*|3*)
+                echo "ok      $code  $url"
+                ;;
+              404|410)
+                echo "::error title=Dead reference::$url returned $code"
+                broken=$((broken + 1))
+                ;;
+              403|429|000)
+                echo "::warning title=Could not verify::$url returned $code — the host declined the request, which is not evidence the page is gone. Open it by hand."
+                unverified=$((unverified + 1))
+                ;;
+              *)
+                echo "::error title=Unexpected status::$url returned $code"
+                broken=$((broken + 1))
+                ;;
+            esac
+          done < urls.txt
+
+          echo
+          echo "$broken dead, $unverified unverified, out of $(wc -l < urls.txt)"
+          if [ "$broken" -gt 0 ]; then
+            echo "A reference a user would click is gone. Fix the URL, do not delete the reference."
+            exit 1
+          fi

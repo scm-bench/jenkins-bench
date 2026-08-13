@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # Go modules. OPA is the one that matters — it is the policy engine, and a
+  # security fix there affects every verdict the tool produces.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      # Patch bumps arrive as one pull request rather than a stream of them.
+      go-patch:
+        update-types: [patch]
+
+  # The release workflow publishes artifacts that cannot be unpublished, so the
+  # actions it runs are worth keeping current. This project has already been
+  # bitten once by pinned actions drifting three major versions behind.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies]

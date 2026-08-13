@@ -1,0 +1,55 @@
+name: Propose a control
+description: A benchmark control that should be covered, or covered differently
+labels: [policy, enhancement]
+body:
+  - type: input
+    id: cis
+    attributes:
+      label: CIS control
+      description: The benchmark number, if it has one
+      placeholder: "1.1.6"
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What should be checked
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: >
+        What can go wrong if it is not configured. This ends up in the
+        control's description, so concrete beats abstract.
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: How the platform exposes it
+      description: >
+        Which endpoint or field answers the question, if you know. If the API
+        does **not** expose it, say so — a control that cannot be evaluated is
+        still worth carrying as a documented MANUAL rather than leaving a
+        silent gap in the mapping.
+
+  - type: textarea
+    id: remediation
+    attributes:
+      label: How an operator fixes it
+      description: >
+        The exact settings path, as the UI words it. This is the part people
+        actually act on.
+      placeholder: Repository settings -> Branch permissions -> Add restriction
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Suggested severity
+      options:
+        - HIGH — bypasses review entirely, or exposes code
+        - MEDIUM — weakens a control that others depend on
+        - LOW — hygiene

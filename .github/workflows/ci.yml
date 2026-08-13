@@ -1,0 +1,212 @@
+# Template. Copy to .github/workflows/ci.yml in a bench repository and replace
+# jenkins-bench with the binary name. See ../README.md.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The release builds darwin and windows archives, and the code that
+        # decides them apart — terminal detection, signal handling, path
+        # handling — is exactly the code a linux-only job never exercises.
+        # Linting and coverage run once, on linux; the others just run the
+        # tests.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: make fmt-check
+
+      - name: Vet
+        if: matrix.os == 'ubuntu-latest'
+        run: make vet
+
+      # go.mod and go.sum are what the release builds from, and .goreleaser.yaml
+      # runs `go mod tidy` during a release — so a repository whose modules are
+      # untidy produces a release built from a dependency set nobody tested.
+      - name: Check go.mod is tidy
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum || {
+            echo "::error::go.mod/go.sum are not tidy; run 'go mod tidy' and commit the result"
+            exit 1
+          }
+
+      # -coverpkg is the point: without it Go measures each package only from
+      # its own tests, so internal/diff read as 55% covered while the CLI tests
+      # exercised most of it. The number was measuring the wrong thing.
+      - name: Test
+        if: matrix.os == 'ubuntu-latest'
+        run: go test ./... -race -count=1 -coverpkg=./... -coverprofile=coverage.out -covermode=atomic
+
+      - name: Test
+        if: matrix.os != 'ubuntu-latest'
+        run: go test ./... -count=1
+
+      - name: Report coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          go tool cover -func=coverage.out | tail -1
+          total=$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+')
+          # A floor, not a target. It is here to catch a change that drops whole
+          # files out of the tested set, which is how the diff renderer came to
+          # have no test at all.
+          awk -v t="$total" 'BEGIN {
+            printf "total coverage: %s%%\n", t
+            if (t + 0 < 85) { printf "::error::coverage %s%% is below the 85%% floor\n", t; exit 1 }
+          }' 
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+
+  policy:
+    name: Policy bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      # The Go tests compile the bundle, but opa check also catches unused
+      # imports and style problems the compiler tolerates.
+      - name: Check Rego
+        run: opa check --strict internal/checks/policies
+
+      - name: Check Rego formatting
+        run: opa fmt --list --fail internal/checks/policies
+
+      # Rego is where every verdict is actually decided, and `go test -cover`
+      # cannot see any of it: the Go suite reported 82% while the 726 lines that
+      # choose PASS or FAIL had no unit tests and no coverage measurement at
+      # all. These are those tests.
+      - name: Run the policy unit tests
+        run: opa test internal/checks/policies -v
+
+      - name: Check policy coverage
+        run: |
+          set -euo pipefail
+          opa test internal/checks/policies --coverage --format=json > policy-coverage.json
+          # Held at 100. The bundle is small, every branch of it is a verdict
+          # somebody will act on, and an uncovered branch is a verdict nobody
+          # has ever seen the rule produce.
+          jq -r '.coverage' policy-coverage.json | awk '{
+            printf "policy coverage: %s%%\n", $1
+            if ($1 + 0 < 100) { printf "::error::policy coverage %s%% is below 100%%\n", $1; exit 1 }
+          }' 
+
+      - name: Verify the bundle loads
+        run: go run ./cmd/jenkins-bench list-checks
+
+  vuln:
+    name: Vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A tool that audits other people's supply chains should know about its
+      # own. govulncheck reports only what this code actually reaches, so a
+      # finding here is a call path, not a dependency-tree coincidence.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A snapshot build exercises the full release matrix on every push, so a
+      # broken goreleaser config is found before a tag depends on it.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: build --snapshot --clean
+
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # `goreleaser build` does not build images, so nothing checked the
+      # Dockerfiles until a tag was pushed — and a release cannot be
+      # unpublished. Both are built here: Dockerfile from source, and the
+      # release image against a stand-in binary, since its whole job is to
+      # copy one in from the build context.
+      - name: Build the source image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: jenkins-bench:ci
+
+      - name: Check the image runs and is read-only about it
+        run: |
+          set -euo pipefail
+          docker run --rm jenkins-bench:ci version
+          docker run --rm jenkins-bench:ci list-checks | tail -1
+          # The image must not run as root: it is handed a credential that can
+          # read every repository on an instance.
+          user=$(docker run --rm --entrypoint id jenkins-bench:ci -u)
+          if [ "$user" = "0" ]; then
+            echo "::error::the image runs as root"
+            exit 1
+          fi
+
+      - name: Build the release image
+        run: |
+          set -euo pipefail
+          # Dockerfile.goreleaser expects a prebuilt binary beside it, which is
+          # what goreleaser puts there. Standing one in checks the COPY path
+          # and the entrypoint without running a release.
+          CGO_ENABLED=0 go build -trimpath -o jenkins-bench ./cmd/jenkins-bench
+          docker build -f Dockerfile.goreleaser -t jenkins-bench:ci-release .
+          docker run --rm jenkins-bench:ci-release version

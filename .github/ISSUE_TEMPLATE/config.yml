@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/scm-bench/jenkins-bench/security/advisories/new
+    about: Please report privately, not as a public issue. See SECURITY.md.
+  - name: Ask a question or propose an idea
+    url: https://github.com/scm-bench/jenkins-bench/discussions
+    about: For anything that is not yet a concrete bug or request.

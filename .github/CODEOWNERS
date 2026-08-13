@@ -1,0 +1,11 @@
+# Default owner for everything.
+* @shenxianpeng
+
+# The policy bundle decides what the tool tells people about their security
+# posture. A wrong verdict here is worse than a crash, so changes always get
+# looked at.
+/internal/checks/ @shenxianpeng
+
+# The release pipeline publishes artifacts that cannot be unpublished.
+/.goreleaser.yaml @shenxianpeng
+/.github/workflows/ @shenxianpeng

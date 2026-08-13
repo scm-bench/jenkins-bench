@@ -1,0 +1,65 @@
+name: A control reported the wrong thing
+description: A check said PASS, FAIL or MANUAL when the real setting says otherwise
+labels: [bug, policy]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most valuable report this project can receive, and a
+        **false PASS** is the most serious version of it — it tells someone
+        they are secure when nothing was actually verified.
+
+  - type: input
+    id: check
+    attributes:
+      label: Which control
+      placeholder: CIS-1.1.15
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reported
+    attributes:
+      label: What the tool reported
+      options: [PASS, FAIL, MANUAL, "N/A", "no verdict at all"]
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What the setting actually is
+      description: >
+        Where you looked in the UI and what it showed. A screenshot with
+        anything identifying cropped out is fine.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and version
+      placeholder: <the platform and version this bench audits, e.g. 8.19.3>
+    validations:
+      required: true
+
+  - type: textarea
+    id: snapshot
+    attributes:
+      label: Snapshot excerpt
+      description: >
+        Run with `--snapshot-out snapshot.json` and paste the entry for the
+        affected repository.
+
+        A snapshot is a precise map of where your instance is weak. **Redact it
+        before posting** — remove hostnames, project keys, repository names and
+        usernames. The field names and values are what matter.
+      render: json
+
+  - type: input
+    id: version
+    attributes:
+      label: jenkins-bench version
+      description: Output of `jenkins-bench version`
+    validations:
+      required: true
