@@ -28,7 +28,7 @@ The recon instance defines two accounts under a global matrix strategy:
 | `/crumbIssuer/api/json` | 200 | 200 | 403 |
 | `/computer/api/json?depth=1` | 200 | 200 | 403 |
 | `/queue/api/json` | 200 | 200 | 403 |
-| `/credentials/api/json?depth=2` | 200 | **200, empty** | 403 |
+| `/credentials/api/json?depth=3` | 200 | **200, empty** | 403 |
 | `/credentials/store/system/domain/_/api/json` | 200 | **404** | 403 |
 | `/pluginManager/api/json?depth=1` | 200 | **403** | 403 |
 | `/updateCenter/site/default/api/json` | 200 | **403** | 403 |
@@ -172,15 +172,24 @@ The per-store URL is more honest — `reader` gets a `404` on
 controller without the credentials plugin returns, so it cannot be read as
 "permission denied" either.
 
-Two things about the query itself, both of which fail the same silent way —
-`200` with no credentials, indistinguishable from an instance that has none:
+The query itself has to be got exactly right, and every way of getting it wrong
+fails silently rather than with an error:
 
-- **`depth` must be at least 2.** At `depth=1` the response stops at the domain
-  wrapper.
-- **A `tree=` expression does not work here.** `tree=stores[*[domains[*[credentials[id,typeName]]]]]`
-  returns the wrappers and no credentials at *any* depth, because the `*`
-  wildcard does not descend into these map-valued fields. Use plain `depth=2`,
-  or the explicit per-store URL, which needs no `depth` at all.
+| `/credentials/api/json?depth=` | credentials | fields per credential |
+| --- | --- | --- |
+| `1` | 0 | — |
+| `2` | 2 | **0 — every element is `{}`** |
+| `3` | 2 | 6 |
+
+`depth=2` is the dangerous one. The array is the right length, so a fetcher that
+counts is satisfied, and every field it then reads is empty. **`depth=3` is the
+minimum** on the aggregate endpoint; the per-store URL
+(`/credentials/store/<store>/domain/<domain>/api/json`) needs `depth=1`.
+
+A `tree=` expression does not work here at all:
+`tree=stores[*[domains[*[credentials[id,typeName]]]]]` returns the wrappers and
+no credentials at *any* depth, because the `*` wildcard does not descend into
+these map-valued fields.
 
 In both failure modes the `credentials` key is **absent from the domain object**,
 not present and empty — which is the one piece of luck here, because it gives
@@ -193,7 +202,15 @@ so the fetcher enumerates keys instead of hard-coding `system/_`.
 
 Nothing secret is exposed: credentials come back as `id`, `typeName`,
 `description`, `fullName`, and a `displayName` that is already masked
-(`deployer/****** (Global deploy credential)`).
+(`deployer/****** (Global deploy credential)`) — though that masked string still
+carries a username, so it is not worth keeping either.
+
+**A credential's scope is not exposed.** `GLOBAL` versus `SYSTEM` appears at no
+depth, on neither the aggregate endpoint nor the per-credential one
+(`/credentials/store/<store>/domain/<domain>/credential/<id>/api/json` returns
+the same six fields). What *is* knowable is the store a credential lives in, and
+that is the more useful fact anyway: the `system` store is offered to everything
+on the controller, a folder store only within its folder.
 
 ### 5. Multibranch projects expand into one child job per branch
 

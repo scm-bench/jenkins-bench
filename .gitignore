@@ -6,3 +6,6 @@ coverage.html
 # Raw controller responses from hack/recon/probe.sh. Regenerable, and a job's
 # config.xml comes back with its remote trigger token in cleartext.
 hack/recon/out/
+.venv/
+__pycache__/
+hack/recon/*.json

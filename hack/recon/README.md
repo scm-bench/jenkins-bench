@@ -62,3 +62,24 @@ verified in only one direction is an assumption.
 ```sh
 docker rm -f jenkins-bench-recon
 ```
+
+## protofetch.py
+
+A throwaway prototype of the fetcher, written before any Go existed to answer
+one question: can [`jenkins-snapshot.schema.json`](https://github.com/scm-bench/scm-bench/blob/main/schemas/jenkins-snapshot.schema.json)
+hold what the API actually returns?
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install jsonschema
+.venv/bin/python protofetch.py http://localhost:18080 admin:adminpw snapshot.json
+```
+
+It obeys the same rules the real fetcher must — GET only, and no secret leaves
+the controller — and it earned its keep immediately: building the credential
+objects is what revealed that `depth=2` returns an array of the right length
+whose elements are all `{}`, and that a credential's scope is not exposed at
+all.
+
+It stays because the Go fetcher should produce the same snapshot from the same
+controller, and a second implementation to diff against is worth more than the
+hundred lines it costs. It is not on any release path and nothing builds it.

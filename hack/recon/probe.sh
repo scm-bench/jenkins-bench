@@ -50,10 +50,12 @@ probe "whoami"            "/whoAmI/api/json"
 probe "plugins"           "/pluginManager/api/json?depth=1"
 probe "computers"         "/computer/api/json?depth=1"
 probe "queue"             "/queue/api/json"
-# depth=2 minimum, and no tree= expression: a tree over these map-valued fields
+# depth=3 minimum: at depth=2 the array is the right length and every element is
+# an empty object, so a fetcher that counts is satisfied and every field it then
+# reads is blank. A tree= over these map-valued fields
 # returns the wrappers and no credentials at any depth, which looks exactly like
 # an instance with none.
-probe "credentials"       "/credentials/api/json?depth=2"
+probe "credentials"       "/credentials/api/json?depth=3"
 probe "credentials-tree"  "/credentials/api/json?tree=stores[*[domains[*[credentials[id,typeName]]]]]"
 probe "credentials-store" "/credentials/store/system/domain/_/api/json?depth=2"
 probe "manage-nodes-xml"  "/computer/build-agent-1/config.xml"
