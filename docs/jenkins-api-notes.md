@@ -237,6 +237,19 @@ missing job is impossible rather than invisible.
 `/job/platform/job/api-service` — every path segment takes its own `/job/`
 prefix.
 
+Segments must be **percent-encoded**, and `+` is not a substitute. Measured
+against a controller whose folders are named `Team A` and `Case 01 - Default`:
+
+| URL form | |
+| --- | --- |
+| `/job/Team A/job/Case 01 - Default/api/json` | rejected before it is sent |
+| `/job/Team%20A/job/Case%2001%20-%20Default/api/json` | `200` |
+| `/job/Team+A/job/Case+01+-+Default/api/json` | `404` |
+
+`+` means a space in a query string, not in a path. Encoding the path with
+form-encoding rules produces a 404 that looks exactly like a job that does not
+exist.
+
 ---
 
 ## Plugins
@@ -331,6 +344,32 @@ This control will almost always pass — but an instance that took the escape
 hatch is worth naming.
 
 ---
+
+## Checked against a second controller
+
+Everything above was measured on the recon instance, which is configured by
+JCasC and therefore configured the way the person writing the notes expected. A
+synthetic instance can only confirm what its author already believed, so the
+findings were re-run against an unrelated **Jenkins 2.541.3** in real use — a
+plugin development controller with its own folders, jobs and plugin set.
+
+Reproduced without change: root `/config.xml` returning `AllView`,
+`tree=securityRealm[*]` exporting nothing, `useSecurity`/`useCrumbs`/`numExecutors`
+present on `/api/json`, the anonymous probe returning `403`, `CpsFlowDefinition`
+and `<sandbox>` readable only from `config.xml`, and `api/json` containing no
+`sandbox` field.
+
+Three things it added that the synthetic instance could not:
+
+- **Job names contain spaces.** `Team A/Case 01 - Default` is an ordinary name,
+  and it is what turned percent-encoding from a detail into the table above.
+- **`hasUpdate` fails realistically.** 28 of 69 plugins had updates pending, on
+  a controller whose update-centre data was hours old — the case the plugin
+  currency control exists for, and proof it is not a control that always passes.
+- **An empty credentials store, seen by an administrator.** `creds=0` where the
+  store *was* readable. That is the genuine zero the reader's `{"stores":{}}`
+  must never be confused with, and it is why the completeness flag is separate
+  from the count.
 
 ## Authentication
 
