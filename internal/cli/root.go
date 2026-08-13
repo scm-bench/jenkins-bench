@@ -35,6 +35,7 @@ nothing about how a job is defined appears anywhere else.`,
 		SilenceErrors: true,
 	}
 
+	root.AddCommand(newScanCommand())
 	root.AddCommand(newListChecksCommand())
 	root.AddCommand(newVersionCommand())
 	return root
