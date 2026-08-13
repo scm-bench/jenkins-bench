@@ -1,0 +1,121 @@
+internal/cli/exit_test.go
+  s_c41547041c8c0c::t_fa92fb222e8076 1-81
+internal/cli/root.go
+  s_c41547041c8c0c::t_88e6851b5b8911 1-41
+README.md
+  s_c41547041c8c0c::t_aa0d490697d056 7-9,11,18-33,42-44,47,51-54,58-59,61-64,73-77
+SECURITY.md
+  s_c41547041c8c0c::t_fabba338ff7a16 1-62
+  s_c41547041c8c0c::t_adf7e676936380 63-66
+internal/console/console.go
+  s_c41547041c8c0c::t_4b7fc042c78131 1-218
+CONTRIBUTING.md
+  s_c41547041c8c0c::t_c14539967926af 3-4,15,36-37,46-66,70,144-150,152-166,176-182
+  s_c41547041c8c0c::t_fabba338ff7a16 1-2,5-14,16-35,38-45,67-69,71-143,151,167-175,183-186
+internal/cli/list_test.go
+  s_c41547041c8c0c::t_c4e796da32ae7b 1-107
+.github/workflows/release.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-127
+internal/checks/policies/jenkins/cis-2.1.6/metadata.json
+  s_c41547041c8c0c::t_f57dc7be7ff546 1-17
+internal/checks/registry_test.go
+  s_c41547041c8c0c::t_21d75a01001eaf 1-13,20-115,124-137,140-142,144-182
+  s_c41547041c8c0c::t_0f55225207389c 139
+  s_c41547041c8c0c::t_c192669b7c8ec0 14-19,116-123,138,143
+internal/checks/policies/jenkins/cis-2.1.6/check.rego
+  s_c41547041c8c0c::t_5ac2848e645bff 1-49
+.github/ISSUE_TEMPLATE/wrong-verdict.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-65
+Dockerfile.goreleaser
+  s_c41547041c8c0c::t_fabba338ff7a16 1-14
+internal/cli/buildinfo_test.go
+  s_c41547041c8c0c::t_4b7fc042c78131 1-130
+internal/checks/policies/lib/common.rego
+  s_c41547041c8c0c::t_c7851149ba20c2 39-41,43-47,53-54
+  s_c41547041c8c0c::t_5ee64746740367 1-38,42,56-105
+  s_c41547041c8c0c::t_d400b9eafc9499 48-52,55
+internal/checks/validate_test.go
+  s_c41547041c8c0c::t_4b72d69ccd4849 34-35,50-51,77-78,92-93
+  s_c41547041c8c0c::t_4fcb4ecf7275ec 1-33,36-49,52-76,79-91,94-109
+.github/pull_request_template.md
+  s_c41547041c8c0c::t_fabba338ff7a16 1-38
+internal/checks/policies/lib/fixtures_test.rego
+  s_c41547041c8c0c::t_697c80403712d6 81-90
+  s_c41547041c8c0c::t_95e8950d5c613d 1-80,91-100
+.github/release.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-78
+go.mod
+  s_c41547041c8c0c::t_ff88f48eb76c9c 1-21,28
+  s_c41547041c8c0c::t_2f2e5ea3dd2b1a 22-27
+.github/ISSUE_TEMPLATE/config.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-8
+.github/CODEOWNERS
+  s_c41547041c8c0c::t_fabba338ff7a16 1-11
+cmd/jenkins-bench/main.go
+  s_c41547041c8c0c::t_d6c929fe135afa 1-49
+LICENSE
+  s_c41547041c8c0c::t_aad469bb244e93 189
+internal/console/console_test.go
+  s_c41547041c8c0c::t_4b7fc042c78131 1-385
+internal/checks/policies/lib/common_test.rego
+  s_c41547041c8c0c::t_e148dfe907d02c 1-155
+Dockerfile
+  s_c41547041c8c0c::t_fabba338ff7a16 1-28,30-39
+  s_c41547041c8c0c::t_adf7e676936380 29
+internal/checks/registry.go
+  s_c41547041c8c0c::t_21d75a01001eaf 1-41,48,53-196,198,200-266
+  s_c41547041c8c0c::t_84c5d31415dbe4 197,199
+  s_c41547041c8c0c::t_e5781cc258bf52 42-47,49-52
+.github/ISSUE_TEMPLATE/new-control.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-55
+.github/labels.json
+  s_c41547041c8c0c::t_fabba338ff7a16 1-82
+internal/cli/list.go
+  s_c41547041c8c0c::t_21d75a01001eaf 1-55
+.github/dependabot.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-28
+internal/checks/policies/jenkins/cis-2.1.6/check_test.rego
+  s_c41547041c8c0c::t_64da9c8b1d2256 1-53,56-63,65-67,70-80
+  s_c41547041c8c0c::t_a93b6eb1150b55 54-55,64,68-69
+internal/cli/exit.go
+  s_c41547041c8c0c::t_9d4cc48cd0a941 1-66
+Makefile
+  s_c41547041c8c0c::t_fabba338ff7a16 1-99
+.github/ISSUE_TEMPLATE/bug.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-63
+.goreleaser.yaml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-237
+CODE_OF_CONDUCT.md
+  s_c41547041c8c0c::t_fabba338ff7a16 1-133
+internal/console/table.go
+  s_c41547041c8c0c::t_4b7fc042c78131 1-342
+.github/workflows/links.yml
+  s_c41547041c8c0c::t_adf7e676936380 5-7
+  s_c41547041c8c0c::t_fabba338ff7a16 1-4,8-100
+internal/cli/version.go
+  s_c41547041c8c0c::t_4b7fc042c78131 1-23
+internal/cli/buildinfo.go
+  s_c41547041c8c0c::t_4b7fc042c78131 1-98
+.github/workflows/ci.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-212
+.github/workflows/labels.yml
+  s_c41547041c8c0c::t_fabba338ff7a16 1-64
+go.sum
+  s_c41547041c8c0c::t_e97edaf4d426af 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "896cce956627bc1c114cced7b68b7cfb10a4f3d3",
+  "prompts": {},
+  "sessions": {
+    "s_c41547041c8c0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac392fc3-826e-4ace-a7b5-c23048caa17e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
