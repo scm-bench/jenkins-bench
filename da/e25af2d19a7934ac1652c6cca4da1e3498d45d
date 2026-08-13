@@ -1,0 +1,96 @@
+go.mod
+  s_c41547041c8c0c::t_8409f36eba85a5 25-49,51-84,86-113,115-125
+internal/report/table.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-39,41-47,49-272,274-400,402-457,459-463,465-478,480-689,691-733,740-777,780-846
+  s_c41547041c8c0c::t_5140f0d23e4e96 458
+  s_c41547041c8c0c::t_534108bf90dbac 40,48,273,401,479,690,734-739,778-779
+  s_c41547041c8c0c::t_04c82e3f62267e 464
+internal/ci/snapshot.go
+  s_c41547041c8c0c::t_3d17746a9ed79f 1-229
+internal/engine/score_test.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-118
+internal/report/overview.go
+  s_c41547041c8c0c::t_04c82e3f62267e 165
+  s_c41547041c8c0c::t_5140f0d23e4e96 183-186,189
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-35,37-131,133,135-164,166-182,187-188,190-371
+  s_c41547041c8c0c::t_534108bf90dbac 36,132,134
+internal/config/cache.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-90
+internal/config/instance_test.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-102
+internal/engine/score.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-93
+internal/ci/jenkins/client.go
+  s_c41547041c8c0c::t_9f7dc786ecc362 1-200,215-382
+  s_c41547041c8c0c::t_9ced00fab2e9ba 201-214
+internal/ci/jenkins/fetcher.go
+  s_c41547041c8c0c::t_6b28f072c2aa75 412,414-443
+  s_c41547041c8c0c::t_6dbab614311e71 8
+  s_c41547041c8c0c::t_f463535b522e9d 405-406
+  s_c41547041c8c0c::t_97b5318ad35f59 1-7,9-404,407-411,413,444-570
+internal/report/report_test.go
+  s_c41547041c8c0c::t_9b023ff3c90cb8 264-282,285-287,294-305,314,320-349
+  s_c41547041c8c0c::t_da3bb009d05f41 1-263
+  s_c41547041c8c0c::t_2aef894fcea9c9 306-313,315-319
+  s_c41547041c8c0c::t_b9d8eb8578f933 283-284,288-293
+internal/engine/engine_test.go
+  s_c41547041c8c0c::t_902954a91ec36b 1-272
+internal/config/discover.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-57
+internal/config/instance.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-88
+internal/report/sarif.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-14,16,18-303
+  s_c41547041c8c0c::t_534108bf90dbac 15,17
+internal/ci/jenkins/tls.go
+  s_c41547041c8c0c::t_627caf1879827f 1-10
+internal/report/json.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-18
+internal/cli/scan_test.go
+  s_c41547041c8c0c::t_9308df2e4c959f 1-287
+internal/config/config.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-29,36-95,105-122,124-247,254-258,260-265,271-303
+  s_c41547041c8c0c::t_2214b9bd896137 30-35,96-104,123
+  s_c41547041c8c0c::t_9917f2c2f07e93 248-253,259,266-270
+internal/cli/root.go
+  s_c41547041c8c0c::t_1e06702fe213e5 38
+internal/engine/engine.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-17,19-38,41-42,45-75,78-185,187,189-190,194-196,205,209,211-215,217,219-221,223-224,227,232,234-375
+  s_c41547041c8c0c::t_5e1afe48dd3018 18,39-40,43-44,76-77,186,188,191-193,197-204,206-208,210,216,218,222,225-226,228-231,233
+internal/ci/jenkins/client_test.go
+  s_c41547041c8c0c::t_cd7bed8f9c747d 1-363
+internal/report/report.go
+  s_c41547041c8c0c::t_534108bf90dbac 68
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-67,69-86
+internal/ci/jenkins/models.go
+  s_c41547041c8c0c::t_df1402ee0a600e 164
+  s_c41547041c8c0c::t_fdb96d068cad46 1-163,165-207
+internal/config/config_test.go
+  s_c41547041c8c0c::t_8a86bb3b0e497d 4,169-174
+  s_c41547041c8c0c::t_0e413f878063c8 1-3,5-168,175
+internal/cli/scan.go
+  s_c41547041c8c0c::t_4cee8fde635ed0 31-32,97-101,150-152,159-171
+  s_c41547041c8c0c::t_77fdbd2ea6f108 1-30,33-96,102-149,153-158,172-389
+internal/ci/jenkins/fetcher_test.go
+  s_c41547041c8c0c::t_3f5cbd414fa4b5 1-467
+internal/config/cache_test.go
+  s_c41547041c8c0c::t_0c44e4d5ceaac6 1-112
+go.sum
+  s_c41547041c8c0c::t_6f709e8b949ad6 1-12,14-55,58-115,117-130,136-193,195-201,206-217,219-232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dae25af2d19a7934ac1652c6cca4da1e3498d45d",
+  "prompts": {},
+  "sessions": {
+    "s_c41547041c8c0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac392fc3-826e-4ace-a7b5-c23048caa17e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
