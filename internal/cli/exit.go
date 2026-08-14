@@ -8,13 +8,9 @@ import (
 	"github.com/scm-bench/jenkins-bench/internal/console"
 )
 
-// exitCodeError carries a specific process exit code out of RunE.
-//
-// A scan that finds problems is a successful scan: the report printed, the tool
-// worked, and exit 1 says the instance is not in the state you asked for. That
-// is a different thing from exit 2, which says the scan could not be completed
-// and the report you are reading is not one. Collapsing them loses the
-// distinction CI most needs.
+// exitCodeError carries a specific exit code out of RunE. Exit 1 is a
+// successful scan with findings; exit 2 is a scan that could not complete —
+// the distinction CI most needs.
 type exitCodeError struct {
 	code int
 	msg  string

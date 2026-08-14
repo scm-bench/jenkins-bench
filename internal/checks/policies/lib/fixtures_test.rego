@@ -1,10 +1,6 @@
-# Shared fixtures for the control unit tests.
-#
-# The configuration here mirrors config.Default() in internal/config. It is
-# restated rather than derived because that is the point: if someone changes a
-# default in Go without meaning to change what the rules assert, the tests that
-# pin the behaviour keep asserting the old numbers and the difference shows up
-# as a failure rather than as a quietly different verdict.
+# Shared fixtures for the control unit tests. The config mirrors
+# config.Default() by restatement, on purpose: an unintended change to a Go
+# default then shows up as a test failure, not a quietly different verdict.
 package scmbench.testdata
 
 import rego.v1
@@ -41,13 +37,9 @@ job_available := {
 	"config": true,
 }
 
-# controller builds a hardened controller with everything readable, and the
-# given fields merged over the top.
-#
-# Hardened rather than empty on purpose. A fixture that starts from zeros makes
-# every test look like it is exercising the failure path, and hides the case
-# where a rule produces no verdict at all because the fields it reads are simply
-# absent.
+# controller builds a hardened controller with everything readable, fields
+# merged over the top. Hardened rather than empty: a zero-valued base hides the
+# rule that produces no verdict because its fields are simply absent.
 controller(fields) := object.union(
 	{
 		"version": "2.541.2",
@@ -88,14 +80,10 @@ job(fields) := object.union(
 	fields,
 )
 
-# replacing overrides one top-level key of a resource outright.
-#
-# object.union merges *recursively*, which is what you want for
-# controller({"security": {"anonymousRead": true}}) — the other security
-# defaults stay in place. It is exactly wrong for a test whose point is that a
-# field is absent: the default's `…Known` flag survives the override and the
-# rule reads a value the test meant to take away. Both of the MANUAL tests here
-# passed against a rule that could not have produced MANUAL, until this existed.
+# replacing overrides one top-level key outright. object.union merges
+# recursively, so a merged override cannot make a field absent — the default's
+# …Known flag survives, and a MANUAL test then passes against a rule that could
+# never produce MANUAL.
 replacing(base, key, value) := object.union(object.remove(base, [key]), {key: value})
 
 # input_for wraps a resource as the engine does.

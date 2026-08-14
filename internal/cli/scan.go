@@ -216,13 +216,9 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 			"or evaluate a snapshot you already have with --snapshot-in")
 	}
 
-	// Warnings go to stderr as they happen, not only into the snapshot.
-	//
-	// The thing a scan most needs to tell someone is "your token cannot read
-	// this, so those controls will say MANUAL" — and saying it only in a field
-	// of a JSON file they may never open means they read a report full of
-	// MANUAL and wonder whether the tool is broken. stderr, so it does not
-	// contaminate a piped report.
+	// Warnings go to stderr as they happen, not only into the snapshot —
+	// "your token cannot read this" said only inside a JSON field reads as a
+	// broken tool. stderr, so a piped report stays clean.
 	warn := StderrWriter()
 	client, err := jenkins.NewClient(jenkins.Options{
 		BaseURL:        baseURL,
@@ -304,21 +300,10 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// exitStatus turns a report into the process's exit code.
-//
-// The three conditions answer three different questions, and a scan can pass
-// the first while failing the others:
-//
-//   - scan.failOn: are there failures this bad?
-//   - scan.failUnder: is the score acceptable?
-//   - scan.maxManual: did the scan actually see enough to have an opinion?
-//
-// The last one exists because MANUAL is excluded from both sides of the score,
-// which is right in itself and perverse in aggregate: the fewer settings a
-// token can read, the smaller the denominator, and the higher the score. On
-// Jenkins that is not a corner case — a token without Job/ExtendedRead cannot
-// answer a single job-scope control, and would otherwise score perfectly on the
-// handful of controller checks it could reach.
+// exitStatus turns a report into the process's exit code. failOn, failUnder
+// and maxManual answer different questions; maxManual exists because MANUAL
+// leaves both sides of the score — the less a token can read, the higher the
+// score, and on Jenkins a token that reads little is the common case.
 func exitStatus(rep *engine.Report, opts *scanOptions) error {
 	// A policy that could not run is a broken tool, not a finding about the
 	// controller. It already degrades to MANUAL so the rest of the report
@@ -364,12 +349,9 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 	return nil
 }
 
-// failureSummary describes the failures without inflating them.
-//
-// Score.Failed counts findings, which is one control per resource. Reporting
-// that as "N controls failed" would not merely be loose: a controller with two
-// hundred jobs turns one misconfigured control into two hundred findings, and
-// "200 controls failed" cannot be true of a bundle that holds twenty.
+// failureSummary counts controls, not findings: one misconfiguration across
+// 200 jobs is 200 findings, and "200 controls failed" cannot be true of a
+// bundle that holds 15.
 func failureSummary(rep *engine.Report, threshold string) string {
 	controls := map[string]bool{}
 	resources := 0

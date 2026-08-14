@@ -53,12 +53,9 @@ func (f *Fetcher) warn(format string, args ...any) {
 	f.client.warnf("%s", msg)
 }
 
-// Fetch reads the controller and returns a normalized snapshot.
-//
-// It decides nothing. Every read that fails becomes an availability key set to
-// false and an error recorded in plain words, never a zero substituted for
-// missing data. A scan with a least-privilege token succeeds and produces a
-// snapshot in which most things are unknown, which is the honest result.
+// Fetch reads the controller and returns a normalized snapshot. It decides
+// nothing: a failed read becomes available[key]=false plus an error in plain
+// words, never a zero standing in for missing data.
 func (f *Fetcher) Fetch(ctx context.Context) (*ci.Snapshot, error) {
 	snap := &ci.Snapshot{
 		SchemaVersion: ci.SchemaVersion,
@@ -210,19 +207,10 @@ func (f *Fetcher) fetchUpdateSite(ctx context.Context, c *ci.Controller) {
 	}
 }
 
-// fetchCredentials reads credential metadata, and works out whether it saw the
-// real set.
-//
-// Availability cannot come from the HTTP status here. Reading credentials
-// without permission returns 200 with `{"stores":{}}` — no error, nothing to
-// branch on, and a fetcher that recorded `credentials: []` would tell the
-// policy layer the controller has none.
-//
-// So the fetcher earns the answer instead: it believes it saw the real set when
-// a store came back, or when the plugin list read succeeded. That second one is
-// the useful part — /pluginManager needs Overall/Administer, so a token that
-// managed it would have been shown any store that existed, and an empty list is
-// then genuinely empty.
+// fetchCredentials reads credential metadata. Availability cannot come from
+// the HTTP status: an unauthorised read returns 200 with {"stores":{}}. It is
+// earned instead — a store came back, or the plugin list read succeeded, which
+// needs Overall/Administer and so proves any existing store would have shown.
 func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 	var root credentialsRoot
 	if err := f.client.GetJSON(ctx, "/credentials/api/json?depth=3", &root); err != nil {
@@ -267,12 +255,9 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 
 // --- jobs ------------------------------------------------------------------
 
-// jobPath builds the URL for a job's full name.
-//
-// Every path segment takes its own /job/ prefix and is percent-encoded. A job
-// called "Case 01 - Default" inside a folder called "Team A" is an ordinary
-// name, and encoding it with form rules — "+" for a space — returns a 404 that
-// looks exactly like a job that does not exist.
+// jobPath builds the URL for a job's full name: each segment gets its own
+// /job/ prefix, percent-encoded. Form-encoding a space as "+" returns a 404
+// indistinguishable from a missing job.
 func jobPath(fullName string) string {
 	var b strings.Builder
 	for _, seg := range strings.Split(fullName, "/") {
@@ -282,12 +267,8 @@ func jobPath(fullName string) string {
 	return b.String()
 }
 
-// listJobs walks folders recursively.
-//
-// A nested tree= expression would do it in one request, but it truncates at
-// whatever depth it was written for: a folder one level deeper simply vanishes,
-// with no error and nothing in the response to say so. Walking costs a request
-// per folder and cannot silently lose a job.
+// listJobs walks folders recursively. A nested tree= expression truncates at
+// whatever depth it was written for, silently losing deeper folders.
 func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) error {
 	var listing jobListing
 	path := prefix + "/api/json?tree=jobs[fullName,name,url,_class]"
@@ -305,10 +286,8 @@ func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) erro
 			}
 			continue
 		}
-		// A multibranch project is one job. Jenkins expands it into a child job
-		// per branch, generated from that branch's Jenkinsfile and identical
-		// across branches, so descending would produce one copy of every
-		// finding per branch and bury the report.
+		// A multibranch project is one job: descending into its generated
+		// per-branch children would repeat every finding per branch.
 		*out = append(*out, it)
 	}
 	return nil
@@ -362,13 +341,9 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 	return jobs, nil
 }
 
-// builtInNodeLabels is every label that means "the controller".
-//
-// "built-in" is the modern one and "master" survives on upgraded controllers,
-// so both are always included — the node list may not have been readable. On
-// top of those go whatever labels the built-in node actually reported, because
-// an operator can give it any name they like and a job pinned to that name runs
-// on the controller exactly as one pinned to "built-in" does.
+// builtInNodeLabels is every label that means "the controller": the well-known
+// pair (the node list may not have been readable) plus whatever the built-in
+// node actually reported — an operator can name it anything.
 func builtInNodeLabels(c *ci.Controller) map[string]bool {
 	labels := map[string]bool{"built-in": true, "master": true}
 	for _, l := range c.BuiltInNode.Labels {
@@ -427,24 +402,10 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 // xmlDeclaration matches a leading XML declaration and captures its version.
 var xmlDeclaration = regexp.MustCompile(`^(\s*<\?xml\s[^?]*?version\s*=\s*['"])([0-9.]+)(['"])`)
 
-// decodeJobConfig parses a job's config.xml, working around Jenkins writing
-// XML 1.1.
-//
-// Jenkins re-serializes a job's configuration with `<?xml version='1.1'?>`
-// whenever it saves one — which is to say, for almost every job on a real
-// controller. Go's encoding/xml supports only 1.0 and rejects the document
-// outright with "unsupported version", so the fetcher recorded
-// available["config"] = false for exactly the jobs that had ever been saved,
-// and every job-scope control reported MANUAL against a controller that was
-// answering perfectly well. It was found by diffing this fetcher against the
-// prototype in hack/recon, which is written in a language whose parser does not
-// care.
-//
-// Only the version in the declaration is rewritten; the encoding is left alone,
-// so a document that is genuinely not UTF-8 still fails rather than being
-// silently mis-decoded. The two versions differ in which control characters are
-// legal in content, so a document that uses one will still fail to parse — as a
-// recorded parse error, which is the honest outcome.
+// decodeJobConfig parses a job's config.xml, rewriting the XML 1.1 declaration
+// Jenkins emits on every save to 1.0: Go's encoding/xml rejects 1.1 outright,
+// which made every saved job unreadable. Only the version is touched — a
+// document with 1.1-only content still fails, as a recorded parse error.
 func decodeJobConfig(body []byte) (*jobConfig, error) {
 	body = xmlDeclaration.ReplaceAll(body, []byte(`${1}1.0${3}`))
 	var cfg jobConfig
@@ -454,11 +415,9 @@ func decodeJobConfig(body []byte) (*jobConfig, error) {
 	return &cfg, nil
 }
 
-// applyConfig extracts what the rules need from a job's configuration.
-//
-// Booleans, counts and class names only. The document it is reading contains
-// the remote trigger token in cleartext and a pipeline script that may contain
-// anything, and a snapshot is written to disk and passed around.
+// applyConfig extracts booleans, counts and class names — nothing else. The
+// document holds the trigger token in cleartext, and snapshots are written to
+// disk and passed around.
 func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Controller, builtInLabels map[string]bool) {
 	if cfg.Disabled == "true" {
 		job.Disabled = true

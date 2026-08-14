@@ -1,9 +1,6 @@
-# Does this job's inline script run inside the Groovy sandbox?
-#
-# Only an inline pipeline has this switch: a Jenkinsfile from SCM is sandboxed
-# by default, and a freestyle job has no pipeline script at all. Both report NA
-# rather than PASS — this control did not verify anything about them, and the
-# job's real problems are CIS-2.3.1's to report.
+# Does the inline script run inside the Groovy sandbox? Only inline pipelines
+# have the switch; everything else is NA rather than PASS — nothing was
+# verified about them.
 package scmbench.rules.cis_2_1_2
 
 import rego.v1

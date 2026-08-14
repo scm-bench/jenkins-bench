@@ -1,9 +1,5 @@
-# Does the controller run builds itself?
-#
-# The executor count has two failure modes that read as zero: a hardened
-# controller, and one whose count could not be read. numExecutorsKnown is what
-# tells them apart, and it is checked first — a fetcher that got nothing must
-# not produce the same PASS as a controller that got it right.
+# Does the controller run builds itself? A hardened zero and an unread zero are
+# the same value; numExecutorsKnown tells them apart and is checked first.
 package scmbench.rules.cis_2_2_3
 
 import rego.v1

@@ -1,9 +1,6 @@
-// Package jenkins reads a controller over its HTTP API and normalizes what it
-// finds into a ci.Snapshot.
-//
-// Every request this package makes is a GET. That is not a convention here: the
-// client exposes no way to issue anything else, and TestClientIssuesOnlyGets
-// asserts it against a stand-in server that fails the test on any other method.
+// Package jenkins reads a controller over its HTTP API into a ci.Snapshot.
+// Every request is a GET: the client exposes no way to issue anything else,
+// and the tests fail on any other method.
 package jenkins
 
 import (
@@ -172,15 +169,10 @@ func (c *Client) Head(ctx context.Context, path string) (http.Header, error) {
 	return headers, err
 }
 
-// ProbeAnonymous issues path with no credentials and reports whether it
-// succeeded.
-//
-// This is the only way to answer "can an unauthenticated client read this
-// controller?". Jenkins exposes neither its security realm nor its
-// authorization strategy, so there is no setting to read. The second return
-// value is false when the probe did not reach a conclusion at all — a transport
-// error is not a denial, and treating it as one would report PASS on a
-// controller nobody checked.
+// ProbeAnonymous issues path with no credentials — the only way to answer
+// "can an unauthenticated client read this?", since the authorization strategy
+// is not exposed. conclusive is false on transport errors: a probe that never
+// ran is not a denial.
 func (c *Client) ProbeAnonymous(ctx context.Context, path string) (allowed, conclusive bool) {
 	_, _, err := c.raw(ctx, path, false)
 	if err == nil {
@@ -198,16 +190,10 @@ func (c *Client) ProbeAnonymous(ctx context.Context, path string) (allowed, conc
 //
 // There is no method parameter. A caller cannot ask this package to write.
 func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byte, http.Header, error) {
-	// Built as a string and parsed once, rather than by assigning to the
-	// fields of a copied url.URL.
-	//
-	// path arrives percent-encoded: the fetcher escapes each job name segment,
-	// because a folder called "Team A" is an ordinary name. Assigning that to
-	// URL.Path is wrong — Path holds the *decoded* form, so String() escapes it
-	// again and "Team%20A" goes out as "Team%2520A". The controller answers 404,
-	// which is indistinguishable from a job that does not exist, and an entire
-	// folder silently vanishes from the scan. Parsing sets Path and RawPath
-	// consistently and the encoding survives.
+	// Built as a string and parsed once. path arrives percent-encoded, and
+	// assigning it to URL.Path (the decoded form) double-encodes it —
+	// "Team%20A" goes out as "Team%2520A", the controller answers 404, and a
+	// whole folder silently vanishes from the scan.
 	endpointStr := strings.TrimRight(c.baseURL.String(), "/") + path
 	endpoint, err := url.Parse(endpointStr)
 	if err != nil {

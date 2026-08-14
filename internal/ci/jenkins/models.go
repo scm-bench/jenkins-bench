@@ -6,20 +6,12 @@ import "encoding/xml"
 // populate them were measured, not read from documentation — see
 // docs/jenkins-api-notes.md.
 
-// instance is GET /api/json.
-//
-// useSecurity and useCrumbs are the only security posture the API exposes.
-// There is no securityRealm and no authorizationStrategy: the root /config.xml
-// returns the primary *view*, and tree=securityRealm[*] exports nothing.
+// instance is GET /api/json. useSecurity and useCrumbs are the only security
+// posture the API exposes; securityRealm and authorizationStrategy are not
+// exported at all.
 type instance struct {
-	// NumExecutors is the built-in node's executor count. It agrees with the
-	// built-in node's own entry under /computer, so the fetcher has two
-	// independent sources for it.
-	//
-	// Pointers, all three, because absent and false are different answers: a
-	// controller that did not report useSecurity has not told us security is
-	// off, and the …Known flags in the snapshot exist to carry that difference
-	// through to the policies.
+	// Pointers, all three, because absent and false are different answers —
+	// the …Known flags in the snapshot carry that difference to the policies.
 	NumExecutors *int  `json:"numExecutors"`
 	UseSecurity  *bool `json:"useSecurity"`
 	UseCrumbs    *bool `json:"useCrumbs"`
@@ -71,12 +63,9 @@ type label struct {
 // hudson.slaves.SlaveComputer.
 const builtInComputerClass = "hudson.model.Hudson$MasterComputer"
 
-// pluginManager is GET /pluginManager/api/json?depth=1, which needs
-// Overall/Administer.
-//
-// There is no security-warning or deprecation field here. Jenkins renders those
-// in its plugin manager from the update centre's warning list, which lives on
-// updates.jenkins.io rather than on the controller.
+// pluginManager is GET /pluginManager/api/json?depth=1 (Overall/Administer).
+// No security-warning or deprecation field exists; Jenkins renders those from
+// a feed on updates.jenkins.io, not from the controller.
 type pluginManager struct {
 	Plugins []plugin `json:"plugins"`
 }
@@ -98,15 +87,10 @@ type updateSite struct {
 	DataTimestamp *int64 `json:"dataTimestamp"`
 }
 
-// credentialsRoot is GET /credentials/api/json?depth=3.
-//
-// depth matters twice over. At depth=1 there are no credentials at all; at
-// depth=2 the array is the right length and every element is an empty object,
-// so a fetcher that counts is satisfied and every field it reads is blank. A
-// tree= expression returns the wrappers and no credentials at any depth,
-// because the wildcard does not descend into these map-valued fields.
-//
-// And an unreadable store is not a 403. It is a 200 with `{"stores":{}}`.
+// credentialsRoot is GET /credentials/api/json?depth=3. depth=3 is the
+// minimum: at depth=2 the array has the right length and every element is {}.
+// A tree= expression returns no credentials at any depth. An unreadable store
+// is not a 403 — it is a 200 with {"stores":{}}.
 type credentialsRoot struct {
 	Stores map[string]credentialStore `json:"stores"`
 }

@@ -1,10 +1,6 @@
-# Are this job's build steps defined as code, in version control?
-#
-# The fetcher resolves every definition class to one of four sources, so this
-# rule never has to know that CpsScmFlowDefinition and a multibranch project are
-# the same answer. "unknown" is a class the fetcher was not taught — a plugin's
-# own definition type — which is missing knowledge, not a missing Jenkinsfile:
-# it reports MANUAL, never FAIL.
+# Are the build steps defined as code, in version control? The fetcher resolves
+# definition classes to four sources; "unknown" is missing knowledge, not a
+# missing Jenkinsfile, and reports MANUAL.
 package scmbench.rules.cis_2_3_1
 
 import rego.v1

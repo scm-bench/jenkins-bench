@@ -1,11 +1,6 @@
-# Does the controller require you to log in?
-#
-# Jenkins exposes neither its security realm nor its authorization strategy —
-# the root /config.xml returns the primary view, and the fields are not exported
-# through the API. So `anonymousRead` is not a setting the fetcher read. It is
-# the result of issuing the same GET with no credentials and seeing what came
-# back, and `anonymousReadKnown` says whether that probe reached a conclusion at
-# all. A network error looks like a denial otherwise, and would read as a PASS.
+# Does the controller require you to log in? The authorization strategy is not
+# exported, so anonymousRead is a probe result, not a setting — and the Known
+# flag is checked first, because a probe that never ran looks like a denial.
 package scmbench.rules.cis_2_1_6
 
 import rego.v1

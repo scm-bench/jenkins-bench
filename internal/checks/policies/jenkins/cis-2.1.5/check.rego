@@ -1,9 +1,5 @@
-# Is CSRF protection on?
-#
-# The fetcher reads two independent signals — the useCrumbs flag and whether
-# /crumbIssuer exists — and hands the policy one boolean with a Known flag.
-# This will pass almost everywhere: the UI toggle was removed in 2.222 and only
-# the DISABLE_CSRF_PROTECTION system property can turn it off. An instance that
+# Is CSRF protection on? Passes almost everywhere — only the
+# DISABLE_CSRF_PROTECTION system property can turn it off, and an instance that
 # took that escape hatch is exactly the one worth naming.
 package scmbench.rules.cis_2_1_5
 

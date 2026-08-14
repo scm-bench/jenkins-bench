@@ -1,18 +1,10 @@
-// Package ci defines the normalized snapshot that fetchers produce and policies
-// consume. Nothing in this package talks HTTP: a fetcher fills these structs
-// in, they are marshalled to JSON, and every rule decision is made by Rego
-// reading that JSON. Keeping the shape stable is what lets a snapshot be
-// captured once and re-evaluated later, offline.
-//
-// The shape is specified in the Jenkins domain schema:
+// Package ci defines the normalized snapshot that fetchers produce and Rego
+// policies consume. Shape:
 // https://github.com/scm-bench/scm-bench/blob/main/docs/jenkins-snapshot.md
 //
-// One rule from that document is enforced here rather than left to the
-// fetcher's judgement: **no field in this package holds a secret.** A job's
-// config.xml returns its remote trigger token in cleartext, and a snapshot is
-// written to disk and passed to people who were not there when it was captured.
-// Presence is a bool; a value is never carried. TestSnapshotHoldsNoSecrets
-// asserts it.
+// No field in this package holds a secret — snapshots are written to disk and
+// passed around. Presence is a bool, a value is never carried;
+// TestSnapshotHoldsNoSecrets asserts it.
 package ci
 
 import "time"
@@ -65,13 +57,10 @@ type Controller struct {
 	Errors      []string        `json:"errors,omitempty"`
 }
 
-// Security is what can be established about the controller's security posture.
-//
-// Every field here is either a flag on the instance API or the result of a
-// probe. Jenkins exposes neither its security realm nor its authorization
-// strategy: the root /config.xml returns the primary *view*, and the fields are
-// not exported through the API at all. A control phrased "is the authorization
-// strategy X?" is therefore not automatable on this platform.
+// Security is what can be established about the controller's posture: flags
+// from the instance API plus probe results. Jenkins exposes neither its
+// security realm nor its authorization strategy, so "is the strategy X?" is
+// not automatable here.
 type Security struct {
 	// Enabled is the controller's useSecurity flag.
 	Enabled      bool `json:"enabled"`

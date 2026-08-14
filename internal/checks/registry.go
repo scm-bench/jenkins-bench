@@ -13,18 +13,10 @@ import (
 	"strings"
 )
 
-// Only the files the bundle is made of, named explicitly.
-//
-// `all:policies` would sweep in the *_test.rego files that sit beside each
-// rule. The loader skips them, so nothing would misbehave — but they would
-// still be compiled into every released binary, and a tool whose argument is
-// that its output should be checkable ought not to ship a binary containing
-// rules named test_fails_when_nothing_restricts_the_default_branch for someone
-// to find and wonder about.
-//
-// A new platform directory is picked up by the wildcards. A new file under
-// lib/ is not, and has to be added here — which announces itself immediately,
-// because any rule importing it fails to compile the moment Load runs.
+// Named explicitly rather than `all:policies`, which would compile the
+// *_test.rego files into every released binary. A new platform directory is
+// picked up by the wildcards; a new lib/ file must be added here, and forgetting
+// it fails to compile the moment Load runs.
 //
 //go:embed policies/lib/common.rego
 //go:embed policies/*/*/check.rego
@@ -38,13 +30,9 @@ const (
 	SeverityLow    = "LOW"
 )
 
-// Scopes a check can be evaluated against.
-//
-// These belong to this bench, not to the family. The generic metadata schema
-// requires only that a control says what it is about; which words are legal is
-// a question about a domain, and it is answered here — and enforced by
-// validate(), because a typo in a scope would otherwise silently produce a
-// control that is never evaluated against anything.
+// Scopes a check can be evaluated against. The generic schema leaves legal
+// values to each domain; validate() enforces them, because a typo'd scope is a
+// control silently never evaluated against anything.
 const (
 	// ScopeController evaluates a control once, against the instance.
 	ScopeController = "controller"
@@ -90,13 +78,9 @@ type Metadata struct {
 	// Remediation names the exact UI path an operator has to walk. This is the
 	// part of a finding that actually gets acted on, so it stays concrete.
 	Remediation string `json:"remediation"`
-	// FixSummary is Remediation's first move, in one imperative line: the thing
-	// to do, and where. Remediation keeps the rest — the project-wide variant,
-	// the exemptions worth granting, the config key that changes what the
-	// control counts — because that is a paragraph, and a paragraph under every
-	// verdict is what turned this report into prose you had to read to find the
-	// next finding. The summary rides with the verdict; the paragraph waits in
-	// its own section.
+	// FixSummary is Remediation's first move in one imperative line. The
+	// summary rides with the verdict; the full paragraph waits in its own
+	// section, because a paragraph under every verdict buries the findings.
 	FixSummary string   `json:"fixSummary"`
 	References []string `json:"references,omitempty"`
 }
@@ -133,12 +117,9 @@ func Load() (*Bundle, error) {
 		}
 		switch path.Ext(p) {
 		case ".rego":
-			// Rego unit tests live beside the rules they test, the same way Go
-			// tests do and the way `opa test` expects to find them, so adding a
-			// control still means adding one directory. They are not part of
-			// the bundle: compiling them into the engine would put assertion
-			// rules in the same namespace as verdicts, and `opa test` is what
-			// runs them.
+			// Test files live beside their rules for `opa test`, but stay out
+			// of the bundle: assertion rules do not belong in the verdict
+			// namespace.
 			if strings.HasSuffix(d.Name(), "_test.rego") {
 				return nil
 			}
@@ -179,10 +160,8 @@ func Load() (*Bundle, error) {
 
 	sort.Slice(bundle.Checks, func(i, j int) bool {
 		a, b := bundle.Checks[i], bundle.Checks[j]
-		// Controls without a benchmark number sort after those with one: they
-		// are supplements to the mapping, not part of it, and a reader scanning
-		// the list in benchmark order should meet the benchmark first. Among
-		// themselves they order by ID so the listing stays deterministic.
+		// Supplements (no benchmark number) sort after the mapping, ordered
+		// by ID among themselves.
 		switch {
 		case a.CISID == "" && b.CISID == "":
 			return a.ID < b.ID

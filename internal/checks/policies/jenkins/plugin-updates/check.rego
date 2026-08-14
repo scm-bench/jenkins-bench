@@ -1,12 +1,7 @@
-# Are the installed plugins current?
-#
-# hasUpdate is computed by the controller against cached update-centre data, so
-# it is only as good as that cache is fresh. A controller that has never reached
-# updates.jenkins.io reports hasUpdate false for every plugin — a clean bill of
-# health from an instance that has no idea whether it is out of date. The
-# freshness checks therefore come before the counting, and each names its own
-# reason: "the timestamp is stale" and "the timestamp could not be read" send
-# an operator to different places.
+# Are the installed plugins current? hasUpdate is computed against cached
+# update-centre data, so freshness is checked before counting: an air-gapped
+# controller reports every plugin current because nothing ever told it
+# otherwise.
 package scmbench.rules.jenkins_plugin_updates
 
 import rego.v1

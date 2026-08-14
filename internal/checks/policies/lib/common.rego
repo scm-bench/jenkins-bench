@@ -1,12 +1,7 @@
-# Helpers shared by every control.
-#
-# The contract each control implements is a single `result` document:
-#
-#   result := {"status": "PASS"|"FAIL"|"MANUAL"|"NA", "details": "...", "evidence": [...]}
-#
-# MANUAL means the controller did not expose enough data to decide — never a
-# guess dressed up as a verdict. NA means the control does not apply to this
-# resource at all. Only PASS and FAIL affect the score.
+# Helpers shared by every control. Each control returns one result document:
+#   {"status": "PASS"|"FAIL"|"MANUAL"|"NA", "details": "...", "evidence": [...]}
+# MANUAL = not enough data to decide; NA = does not apply. Only PASS and FAIL
+# affect the score.
 package scmbench.lib
 
 import rego.v1
@@ -23,40 +18,25 @@ available(key) if {
 	object.get(resource, ["available", key], false) == true
 }
 
-# list reads a list-valued field, treating an explicit JSON null exactly like a
-# missing one.
-#
-# This is load-bearing. Go marshals a nil slice to null rather than [], and
-# object.get only substitutes its default when the key is *absent* — a key
-# present with a null value comes back as null. Passing that null to concat or
-# sort raises a type error, which makes the whole rule undefined and the control
-# report nothing at all. Always read lists through this.
+# list reads a list-valued field, treating an explicit JSON null like a missing
+# one. Load-bearing: Go marshals a nil slice to null, null errors concat/sort,
+# and an errored rule is undefined — the control reports nothing at all.
 list(path) := value if {
 	value := object.get(resource, path, [])
 	is_array(value)
 } else := []
 
-# list_from is list() for a document other than the resource — the config,
-# usually. Same trap, same cure: a nil Go slice marshals to null, and a rule
-# that passes null to count or iteration goes undefined and reports nothing.
+# list_from is list() for a document other than the resource (the config,
+# usually). Same null trap, same cure.
 list_from(doc, key) := value if {
 	value := object.get(doc, key, [])
 	is_array(value)
 } else := []
 
-# known reports whether a field that has a legitimate zero or false was actually
-# measured. The argument is the value's path; the flag is its sibling with
-# "Known" appended.
-#
-# Jenkins hands out zeros and falses that mean two different things. A built-in
-# node with no executors is a hardened controller; a built-in node whose
-# executor count could not be read is also 0. An instance that denies anonymous
-# access reads false; so does one where the probe never ran. Every such field
-# carries a `…Known` companion, and a rule reads it before it reads the value.
-# It is defined only when the flag is true, the same shape as available(), so
-# that `not known(...)` reads the way it looks. A version returning a boolean
-# was tried first and does not: a function that returns false is still defined,
-# and `not` over it does not mean what a reader expects.
+# known reports whether a field with a legitimate zero/false was actually
+# measured, via its sibling "…Known" flag: an unread executor count and a
+# hardened zero are the same value otherwise. Defined only when true, like
+# available(), so `not known(...)` means what it looks like.
 known(path) if {
 	n := count(path)
 	flag := array.concat(array.slice(path, 0, n - 1), [sprintf("%sKnown", [path[n - 1]])])

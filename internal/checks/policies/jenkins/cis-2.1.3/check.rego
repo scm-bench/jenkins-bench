@@ -1,8 +1,6 @@
-# Is anything auditing the build environment?
-#
-# The plugin list needs Overall/Administer, so the MANUAL branch here is the
-# common case for a least-privilege token — and an absent plugin list is
-# missing knowledge, not a missing plugin.
+# Is anything auditing the build environment? An unreadable plugin list is
+# missing knowledge, not a missing plugin — MANUAL, the common case for a
+# least-privilege token.
 package scmbench.rules.cis_2_1_3
 
 import rego.v1
