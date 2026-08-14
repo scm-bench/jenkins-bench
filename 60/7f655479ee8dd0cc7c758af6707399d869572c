@@ -1,0 +1,25 @@
+internal/report/lines.go
+  s_c41547041c8c0c::t_e063974b7de44d 144-152
+  s_c41547041c8c0c::t_e20f2d9035b7b9 1-143,153-390
+internal/report/table.go
+  s_c41547041c8c0c::t_2b7fcc4501a456 38-43,46-48,73,79-81,84,87,612-617,621-627,629-637,639-657,659,689-690,692-713,715-717
+internal/report/report_test.go
+  s_c41547041c8c0c::t_bff28b1e46c2bf 106-109,120,126-130,273-283,323,357-396,407-423,429,431-469,476-506
+  s_c41547041c8c0c::t_96a6500db2c331 397-406,424-428,430,470-475
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "607f655479ee8dd0cc7c758af6707399d869572c",
+  "prompts": {},
+  "sessions": {
+    "s_c41547041c8c0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac392fc3-826e-4ace-a7b5-c23048caa17e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
