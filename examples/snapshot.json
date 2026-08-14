@@ -1,0 +1,195 @@
+{
+  "schemaVersion": "1",
+  "metadata": {
+    "tool": "jenkins-bench",
+    "toolVersion": "0.1.0",
+    "platform": "jenkins",
+    "baseUrl": "https://jenkins.example.com",
+    "generatedAt": "2026-08-14T09:00:00Z",
+    "warnings": [
+      "this token cannot read the plugin list, which needs Overall/Administer; plugin checks will report MANUAL"
+    ]
+  },
+  "controller": {
+    "version": "2.541.2",
+    "security": {
+      "enabled": true,
+      "enabledKnown": true,
+      "csrfProtection": true,
+      "csrfProtectionKnown": true,
+      "anonymousRead": true,
+      "anonymousReadKnown": true
+    },
+    "builtInNode": {
+      "numExecutors": 2,
+      "numExecutorsKnown": true,
+      "labels": ["built-in"]
+    },
+    "agents": [
+      {
+        "name": "linux-1",
+        "offline": false,
+        "temporarilyOffline": false,
+        "numExecutors": 4,
+        "labels": ["linux", "docker", "linux-1"]
+      },
+      {
+        "name": "windows-1",
+        "offline": true,
+        "temporarilyOffline": false,
+        "numExecutors": 2,
+        "labels": ["windows", "windows-1"]
+      }
+    ],
+    "credentials": [
+      {
+        "id": "deploy-user",
+        "type": "Username with password",
+        "store": "system",
+        "domain": "_",
+        "description": "Global deploy credential"
+      },
+      {
+        "id": "npm-token",
+        "type": "Secret text",
+        "store": "system",
+        "domain": "_",
+        "description": "Registry token"
+      }
+    ],
+    "updateSite": {
+      "url": "https://updates.jenkins.io/update-center.json",
+      "dataTimestamp": "2026-08-14T06:30:00Z",
+      "dataTimestampKnown": true
+    },
+    "available": {
+      "root": true,
+      "agents": true,
+      "credentials": true,
+      "plugins": false,
+      "updateSite": false
+    },
+    "errors": [
+      "the plugin list could not be read (GET /pluginManager/api/json?depth=1: HTTP 403 Forbidden); Overall/Administer is required"
+    ]
+  },
+  "jobs": [
+    {
+      "fullName": "platform/api-service",
+      "name": "api-service",
+      "folder": "platform",
+      "url": "https://jenkins.example.com/job/platform/job/api-service/",
+      "class": "org.jenkinsci.plugins.workflow.job.WorkflowJob",
+      "kind": "pipeline",
+      "disabled": false,
+      "buildable": true,
+      "definition": {
+        "source": "scm",
+        "scriptPath": "Jenkinsfile",
+        "scmUrls": ["https://git.example.com/platform/api-service.git"],
+        "sandbox": false,
+        "sandboxKnown": false
+      },
+      "triggers": [{ "type": "SCMTrigger", "spec": "H/15 * * * *" }],
+      "remoteTriggerToken": false,
+      "remoteTriggerTokenKnown": true,
+      "runsOnBuiltInNode": false,
+      "runsOnBuiltInNodeKnown": false,
+      "available": { "api": true, "config": true }
+    },
+    {
+      "fullName": "platform/nightly-deploy",
+      "name": "nightly-deploy",
+      "folder": "platform",
+      "url": "https://jenkins.example.com/job/platform/job/nightly-deploy/",
+      "class": "org.jenkinsci.plugins.workflow.job.WorkflowJob",
+      "kind": "pipeline",
+      "disabled": false,
+      "buildable": true,
+      "definition": {
+        "source": "inline",
+        "sandbox": false,
+        "sandboxKnown": true
+      },
+      "triggers": [{ "type": "TimerTrigger", "spec": "H 2 * * *" }],
+      "remoteTriggerToken": false,
+      "remoteTriggerTokenKnown": true,
+      "runsOnBuiltInNode": false,
+      "runsOnBuiltInNodeKnown": false,
+      "available": { "api": true, "config": true }
+    },
+    {
+      "fullName": "platform/mobile-app",
+      "name": "mobile-app",
+      "folder": "platform",
+      "url": "https://jenkins.example.com/job/platform/job/mobile-app/",
+      "class": "org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject",
+      "kind": "multibranch",
+      "disabled": false,
+      "buildable": true,
+      "definition": {
+        "source": "scm",
+        "scmUrls": ["https://git.example.com/platform/mobile-app.git"],
+        "sandbox": false,
+        "sandboxKnown": false
+      },
+      "remoteTriggerToken": false,
+      "remoteTriggerTokenKnown": true,
+      "runsOnBuiltInNode": false,
+      "runsOnBuiltInNodeKnown": false,
+      "available": { "api": true, "config": true }
+    },
+    {
+      "fullName": "legacy-nightly-build",
+      "name": "legacy-nightly-build",
+      "folder": "",
+      "url": "https://jenkins.example.com/job/legacy-nightly-build/",
+      "class": "hudson.model.FreeStyleProject",
+      "kind": "freestyle",
+      "disabled": false,
+      "buildable": true,
+      "definition": { "source": "ui", "sandbox": false, "sandboxKnown": false },
+      "triggers": [{ "type": "TimerTrigger", "spec": "H 3 * * *" }],
+      "remoteTriggerToken": true,
+      "remoteTriggerTokenKnown": true,
+      "runsOnBuiltInNode": true,
+      "runsOnBuiltInNodeKnown": true,
+      "available": { "api": true, "config": true }
+    },
+    {
+      "fullName": "restricted/audit-export",
+      "name": "audit-export",
+      "folder": "restricted",
+      "url": "https://jenkins.example.com/job/restricted/job/audit-export/",
+      "class": "hudson.model.FreeStyleProject",
+      "kind": "freestyle",
+      "disabled": false,
+      "buildable": true,
+      "definition": {},
+      "remoteTriggerToken": false,
+      "remoteTriggerTokenKnown": false,
+      "runsOnBuiltInNode": false,
+      "runsOnBuiltInNodeKnown": false,
+      "available": { "api": true, "config": false },
+      "errors": [
+        "the job configuration could not be read (GET /job/restricted/job/audit-export/config.xml: HTTP 403 Forbidden); Job/ExtendedRead is required"
+      ]
+    },
+    {
+      "fullName": "archive/old-installer",
+      "name": "old-installer",
+      "folder": "archive",
+      "url": "https://jenkins.example.com/job/archive/job/old-installer/",
+      "class": "hudson.model.FreeStyleProject",
+      "kind": "freestyle",
+      "disabled": true,
+      "buildable": false,
+      "definition": { "source": "ui", "sandbox": false, "sandboxKnown": false },
+      "remoteTriggerToken": false,
+      "remoteTriggerTokenKnown": true,
+      "runsOnBuiltInNode": true,
+      "runsOnBuiltInNodeKnown": true,
+      "available": { "api": true, "config": true }
+    }
+  ]
+}

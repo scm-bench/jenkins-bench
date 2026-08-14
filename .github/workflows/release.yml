@@ -1,0 +1,42 @@
+# The release steps live in scm-bench/.github, shared by every bench. This file
+# owns the trigger, the permissions the shared workflow needs, and the
+# concurrency rule that keeps two releases from racing.
+name: Release
+
+on:
+  # Normal path: someone pushes a tag from a checkout.
+  push:
+    tags: ["v*"]
+  # Manual path: cut a release from the GitHub UI or API, with no local
+  # checkout involved. The tag is created by the workflow rather than
+  # beforehand, so releasing does not require a machine with push access.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create and release, e.g. v0.1.0-rc.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  # id-token backs cosign's keyless signing: the workflow's OIDC token becomes
+  # the signing identity, so there is no private key to store or rotate.
+  id-token: write
+  # attestations lets the run record SLSA build provenance for the archives.
+  attestations: write
+
+# Two releases must never run at once: both would try to create the tag, and
+# whichever lost the race would already have started publishing. In-progress
+# runs are never cancelled — killing a release halfway through leaves images
+# pushed with no release to match them.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: scm-bench/.github/.github/workflows/go-bench-release.yml@main
+    with:
+      bench: jenkins-bench
+      tag: ${{ inputs.tag || '' }}

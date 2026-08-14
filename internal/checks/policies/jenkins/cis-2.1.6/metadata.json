@@ -1,0 +1,17 @@
+{
+  "id": "CIS-2.1.6",
+  "cisId": "2.1.6",
+  "package": "scmbench.rules.cis_2_1_6",
+  "scope": "controller",
+  "severity": "HIGH",
+  "platforms": ["jenkins"],
+  "automated": true,
+  "title": "Ensure users must authenticate to access the build environment",
+  "description": "A controller readable without logging in hands an attacker the map before they start: job names, build history, console output, and the shape of the estate. It also removes the one thing an investigation depends on, which is being able to attribute an action to an actor.",
+  "remediation": "Manage Jenkins -> Security: keep \"Enable security\" on, and under Authorization remove every permission granted to the Anonymous user. With a matrix strategy that means clearing the Anonymous row; with \"Logged-in users can do anything\" it is already the case. Do not use \"Anyone can do anything\", which grants administration to unauthenticated clients. If the controller is deliberately public, exempt it with the check selection flags rather than leaving a known FAIL in the report.",
+  "fixSummary": "Remove all Anonymous permissions at Manage Jenkins -> Security -> Authorization.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://www.jenkins.io/doc/book/security/managing-security/"
+  ]
+}

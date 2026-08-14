@@ -1,0 +1,19 @@
+{
+  "id": "CIS-2.3.1",
+  "cisId": "2.3.1",
+  "package": "scmbench.rules.cis_2_3_1",
+  "scope": "job",
+  "severity": "HIGH",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": true,
+  "title": "Ensure all build steps are defined as code",
+  "description": "Build steps in version control are reviewed, reverted and diffed like the code they build. A freestyle job's steps are form fields nobody reviews and no history records; an inline pipeline script is code, but it lives only in the controller, so it is neither reviewed nor recoverable if the controller is lost or compromised.",
+  "remediation": "Convert the job to a Pipeline whose definition is \"Pipeline script from SCM\": job -> Configure -> Pipeline -> Definition, point it at the repository and its Jenkinsfile. For a freestyle job this means expressing the build steps as a Jenkinsfile first; for an inline pipeline it means committing the existing script. A multibranch project already reads a Jenkinsfile per branch and passes as-is.",
+  "fixSummary": "Point the job at a Jenkinsfile in SCM: Configure -> Pipeline -> Pipeline script from SCM.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://www.jenkins.io/doc/book/pipeline/getting-started/#defining-a-pipeline-in-scm"
+  ]
+}

@@ -1,0 +1,22 @@
+# The pipeline itself lives in scm-bench/.github, shared by every bench, so the
+# family's CI rules cannot drift between repositories. This file owns only what
+# is local: the trigger, the concurrency group, and this bench's name.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: scm-bench/.github/.github/workflows/go-bench-ci.yml@main
+    with:
+      bench: jenkins-bench

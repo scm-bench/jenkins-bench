@@ -1,0 +1,14 @@
+# Release image: goreleaser has already built the binary for the target
+# platform and placed it in the build context.
+FROM alpine:3.24
+
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -u 10001 scmbench
+
+COPY jenkins-bench /usr/local/bin/jenkins-bench
+
+USER 10001
+WORKDIR /work
+
+ENTRYPOINT ["/usr/local/bin/jenkins-bench"]
+CMD ["--help"]

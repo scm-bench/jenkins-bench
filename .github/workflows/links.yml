@@ -1,0 +1,27 @@
+# The check itself lives in scm-bench/.github, shared by every bench. This file
+# owns the trigger: a weekly schedule because links rot with no commit to hang
+# a failure on, plus pull requests that touch the files carrying URLs.
+name: Links
+
+on:
+  schedule:
+    # Weekly, Monday 04:17 UTC. Off the hour on purpose: scheduled jobs at :00
+    # queue behind everyone else's cron.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/checks/policies/**/metadata.json"
+      - "internal/report/sarif.go"
+      - ".github/workflows/links.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: links-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    uses: scm-bench/.github/.github/workflows/go-bench-links.yml@main

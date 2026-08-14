@@ -1,0 +1,24 @@
+# The label set lives once, in scm-bench/.github/labels.json, and this sync
+# pulls from there — no per-repository copy to drift. On a schedule because
+# changes to the central file happen in a different repository, where no push
+# event of ours can see them.
+name: Labels
+
+on:
+  schedule:
+    # Weekly, Monday 04:32 UTC. Off the hour on purpose: scheduled jobs at :00
+    # queue behind everyone else's cron.
+    - cron: "32 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  labels:
+    uses: scm-bench/.github/.github/workflows/go-bench-labels.yml@main

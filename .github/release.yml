@@ -1,0 +1,78 @@
+# Categories for the release notes GitHub generates.
+#
+# This is the only thing that categorises a release body. goreleaser builds and
+# uploads the artifacts into a draft and writes no changelog of its own
+# (`changelog.disable` in .goreleaser.yaml), so the notes are written by hand on
+# the release page, and this file decides how the "Generate release notes"
+# button groups what it finds.
+#
+# What it finds is *merged pull requests*, grouped by their labels. Commits
+# pushed straight to main are not pull requests and do not appear. That is the
+# trade: a hand-written narrative plus whatever pull requests landed, rather
+# than a machine-assembled list of every commit.
+#
+# Every label named below exists in .github/labels.json, which the Labels
+# workflow syncs. That is not a formality — a category whose labels do not
+# exist can never fill, and it fails silently. This file previously named
+# thirteen labels that did not exist, including four of the six in Bug fixes.
+#
+# This is GitHub's own schema, not Release Drafter's: everything nests under
+# `changelog:`, exclusions live at `changelog.exclude.labels` rather than a
+# top-level `exclude-labels:`, and there is no `collapse-after:`. A file in
+# Release Drafter's shape is not rejected — it is silently ignored, and the
+# notes quietly fall back to one flat uncategorised list.
+#
+# Order matters: a pull request lands in the first category whose labels it
+# matches, so the categories that change what users must react to come first.
+changelog:
+  exclude:
+    labels:
+      - no-changelog
+      # GitHub creates these with every repository; they are not in
+      # labels.json because nothing has to put them there.
+      - invalid
+      - duplicate
+      - question
+      - wontfix
+
+  categories:
+    - title: 💥 Breaking changes
+      labels: [breaking-change]
+
+    # jenkins-bench specific, and deliberately near the top: a new or retuned
+    # control changes what an unchanged instance scores, which is the thing
+    # most likely to surprise someone after upgrading.
+    - title: 🔍 Policy changes
+      labels: [policy]
+
+    - title: 🚀 Features
+      labels: [enhancement]
+
+    - title: 🐛 Bug fixes
+      labels: [bug, false-pass]
+
+    - title: 📝 Documentation
+      labels: [documentation]
+
+    - title: 🚦 Tests
+      labels: [test]
+
+    # Ahead of Maintenance on purpose. Dependabot labels its GitHub Actions
+    # updates [dependencies, ci], and a pull request lands in the first
+    # category it matches — with Maintenance first, every Actions bump was
+    # filed as housekeeping rather than as the dependency change it is.
+    - title: 📦 Dependencies
+      labels: [dependencies]
+
+    - title: 👻 Maintenance
+      labels: [maintenance, ci]
+
+    - title: 🗑 Removed
+      labels: [deprecated]
+
+    # Must stay last, and must carry the "*" wildcard. Release Drafter treats a
+    # category with no labels as the catch-all; GitHub does not, so leaving the
+    # labels off here would drop every unlabelled pull request instead of
+    # collecting it.
+    - title: ✍ Other changes
+      labels: ["*"]

@@ -1,0 +1,16 @@
+{
+  "id": "JENKINS-PLUGIN-UPDATES",
+  "package": "scmbench.rules.jenkins_plugin_updates",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": ["jenkins"],
+  "automated": true,
+  "title": "Ensure installed plugins are up to date",
+  "description": "Most of a Jenkins controller's attack surface is its plugins, and most Jenkins security advisories are plugin advisories. This control carries no cisId on purpose: the CIS guide has no entry for keeping the CI system's own components current, and borrowing a neighbouring number would make the benchmark mapping dishonest. It is a supplement, listed after the mapped controls.",
+  "remediation": "Manage Jenkins -> Plugins -> Updates: review and apply the pending updates, then restart if prompted. Check the changelog of anything pinned deliberately. The verdict is only issued when the controller's update-centre data is fresher than thresholds.updateSiteMaxAgeDays — on an air-gapped controller every plugin reports itself current because nothing has ever told it otherwise, and that is reported as MANUAL rather than as a pass.",
+  "fixSummary": "Apply pending plugin updates at Manage Jenkins -> Plugins -> Updates.",
+  "references": [
+    "https://www.jenkins.io/security/advisories/",
+    "https://www.jenkins.io/doc/book/managing/plugins/#updating-a-plugin"
+  ]
+}

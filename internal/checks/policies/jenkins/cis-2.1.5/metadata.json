@@ -1,0 +1,17 @@
+{
+  "id": "CIS-2.1.5",
+  "cisId": "2.1.5",
+  "package": "scmbench.rules.cis_2_1_5",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": ["jenkins"],
+  "automated": true,
+  "title": "Ensure access to build environments is limited",
+  "description": "This control asks that only trusted, qualified users can act on the build environment. CSRF protection is the part of that promise a controller can verify about itself: without it, any web page a logged-in user visits can submit requests in their name — trigger builds, change configuration — so the limit on who can act is only as strong as every browser tab of every administrator. The permission matrix itself is not exposed by any API and still needs review by hand.",
+  "remediation": "CSRF protection is on by default and its UI toggle was removed in Jenkins 2.222; if this control fails, the controller was started with -Dhudson.security.csrf.GlobalCrumbIssuerConfiguration.DISABLE_CSRF_PROTECTION=true. Remove that system property from the service definition or startup script and restart. Then review the authorization matrix at Manage Jenkins -> Security by hand, which no API exposes.",
+  "fixSummary": "Remove the DISABLE_CSRF_PROTECTION system property and restart the controller.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://www.jenkins.io/doc/book/security/csrf-protection/"
+  ]
+}

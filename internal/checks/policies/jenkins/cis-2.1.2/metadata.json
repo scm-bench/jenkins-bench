@@ -1,0 +1,19 @@
+{
+  "id": "CIS-2.1.2",
+  "cisId": "2.1.2",
+  "package": "scmbench.rules.cis_2_1_2",
+  "scope": "job",
+  "severity": "HIGH",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": true,
+  "title": "Ensure all aspects of the pipeline infrastructure and configuration are immutable",
+  "description": "The Groovy sandbox is what stands between a pipeline script and the controller itself: outside it, a script runs with the controller's own privileges and can rewrite jobs, read every credential and alter the running instance — the opposite of an immutable pipeline infrastructure. This control checks the one aspect of immutability a job's configuration exposes; the broader question (is the controller deployed as code?) still needs a person.",
+  "remediation": "Job -> Configure -> Pipeline: tick \"Use Groovy Sandbox\". If the script then needs signature approvals, grant the specific methods at Manage Jenkins -> In-process Script Approval rather than turning the sandbox back off — each approval is one named hole instead of no wall at all. Better still, move the script into SCM (see CIS-2.3.1), where the sandbox is on by default.",
+  "fixSummary": "Tick \"Use Groovy Sandbox\" at the job's Configure -> Pipeline definition.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://www.jenkins.io/doc/book/managing/script-approval/"
+  ]
+}

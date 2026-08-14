@@ -1,0 +1,18 @@
+{
+  "id": "CIS-2.3.8",
+  "cisId": "2.3.8",
+  "package": "scmbench.rules.cis_2_3_8",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure scanners are in place to identify and prevent sensitive data in pipeline files",
+  "description": "Credentials pasted into a Jenkinsfile outlive every rotation and travel with every checkout. The scanners that catch them — pre-commit hooks, push protection, repository scanning — run on the SCM platform and in developer tooling, not on the controller.",
+  "remediation": "Enable secret scanning where pipeline files live: push protection or its equivalent in the SCM platform's security settings, plus a pre-commit scanner in the repositories that hold Jenkinsfiles. On the Jenkins side, keep secrets out of reach of scripts by using the credentials binding rather than environment blocks pasted into the file.",
+  "fixSummary": "Enable push protection in the SCM settings of repositories holding Jenkinsfiles.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security"
+  ]
+}

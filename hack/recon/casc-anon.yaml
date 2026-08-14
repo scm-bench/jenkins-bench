@@ -1,0 +1,54 @@
+# Scenario 2: the permissive posture.
+#
+# Anonymous gets Overall/Read, which is what the unauthenticated-GET probe has
+# to detect — scenario 1 proved the probe returns 403 when anonymous has
+# nothing, and this proves it returns 200 when anonymous can read. Without both
+# halves the probe is an assumption, not a measurement.
+#
+# Also adds a multibranch pipeline pointed at a local seed repo, to settle
+# whether a multibranch project's per-branch child jobs appear in the job tree.
+jenkins:
+  systemMessage: "jenkins-bench recon instance (permissive)"
+  numExecutors: 2
+  slaveAgentPort: 50000
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${ADMIN_PASSWORD}"
+        - id: "reader"
+          password: "${READER_PASSWORD}"
+
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - user:
+            name: "admin"
+            permissions:
+              - "Overall/Administer"
+        - user:
+            name: "reader"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+        - group:
+            name: "anonymous"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+
+jobs:
+  - script: |
+      folder('platform') { description('Nested folder.') }
+  - script: |
+      multibranchPipelineJob('platform/multibranch-app') {
+        description('Multibranch — does it expand into per-branch child jobs?')
+        branchSources {
+          git {
+            id('seed-repo')
+            remote('/var/jenkins_home/seed-repo')
+          }
+        }
+      }
