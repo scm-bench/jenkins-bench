@@ -1,0 +1,28 @@
+internal/ci/jenkins/client.go
+  s_c41547041c8c0c::t_78f88e80a1d523 294
+internal/ci/jenkins/tls.go
+  s_c41547041c8c0c::t_7dcaebf3aa04ea 9
+  s_c41547041c8c0c::t_78f88e80a1d523 6-7
+internal/cli/scan.go
+  s_c41547041c8c0c::t_78f88e80a1d523 105-109,113-135
+  s_c41547041c8c0c::t_3a3906f8a30815 136
+internal/cli/scan_test.go
+  s_c41547041c8c0c::t_7dcaebf3aa04ea 307-312,316,319-341
+  s_c41547041c8c0c::t_07723dfbe333d5 313-315,317-318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b998997cea6d60ff429a11386e6b9e29a0a34b36",
+  "prompts": {},
+  "sessions": {
+    "s_c41547041c8c0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac392fc3-826e-4ace-a7b5-c23048caa17e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
