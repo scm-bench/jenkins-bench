@@ -36,6 +36,7 @@ nothing about how a job is defined appears anywhere else.`,
 	}
 
 	root.AddCommand(newScanCommand())
+	root.AddCommand(newInitCommand())
 	root.AddCommand(newListChecksCommand())
 	root.AddCommand(newVersionCommand())
 	return root

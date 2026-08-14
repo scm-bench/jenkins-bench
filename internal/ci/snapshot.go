@@ -97,6 +97,12 @@ type BuiltInNode struct {
 	// NumExecutorsKnown distinguishes "zero executors, correctly configured"
 	// from "the count could not be read", which are the same value above.
 	NumExecutorsKnown bool `json:"numExecutorsKnown"`
+	// Labels are what the built-in node answers to. "built-in" is the modern
+	// one and "master" survives on upgraded controllers, but an operator can
+	// add any label they like — and a job pinned to that label runs on the
+	// controller exactly as one pinned to "built-in" does. Resolving where a
+	// job runs against a hard-coded pair would have missed every such job.
+	Labels []string `json:"labels,omitempty"`
 }
 
 // Agent is one node attached to the controller.

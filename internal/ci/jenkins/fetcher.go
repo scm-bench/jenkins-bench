@@ -152,6 +152,9 @@ func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 			if n.NumExecutors != nil && !c.BuiltInNode.NumExecutorsKnown {
 				c.BuiltInNode.NumExecutors, c.BuiltInNode.NumExecutorsKnown = *n.NumExecutors, true
 			}
+			for _, l := range n.AssignedLabels {
+				c.BuiltInNode.Labels = append(c.BuiltInNode.Labels, l.Name)
+			}
 			continue
 		}
 		agent := ci.Agent{
@@ -359,11 +362,19 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 	return jobs, nil
 }
 
+// builtInNodeLabels is every label that means "the controller".
+//
+// "built-in" is the modern one and "master" survives on upgraded controllers,
+// so both are always included — the node list may not have been readable. On
+// top of those go whatever labels the built-in node actually reported, because
+// an operator can give it any name they like and a job pinned to that name runs
+// on the controller exactly as one pinned to "built-in" does.
 func builtInNodeLabels(c *ci.Controller) map[string]bool {
-	// "built-in" is the modern label; "master" is what controllers upgraded
-	// from an older version still carry, and a job pinned to it runs on the
-	// controller just the same.
-	return map[string]bool{"built-in": true, "master": true}
+	labels := map[string]bool{"built-in": true, "master": true}
+	for _, l := range c.BuiltInNode.Labels {
+		labels[strings.ToLower(l)] = true
+	}
+	return labels
 }
 
 func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controller, builtInLabels map[string]bool) (ci.Job, error) {

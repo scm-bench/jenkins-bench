@@ -216,6 +216,14 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 			"or evaluate a snapshot you already have with --snapshot-in")
 	}
 
+	// Warnings go to stderr as they happen, not only into the snapshot.
+	//
+	// The thing a scan most needs to tell someone is "your token cannot read
+	// this, so those controls will say MANUAL" — and saying it only in a field
+	// of a JSON file they may never open means they read a report full of
+	// MANUAL and wonder whether the tool is broken. stderr, so it does not
+	// contaminate a piped report.
+	warn := StderrWriter()
 	client, err := jenkins.NewClient(jenkins.Options{
 		BaseURL:        baseURL,
 		Username:       username,
@@ -224,6 +232,9 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 		MaxRetries:     2,
 		Insecure:       cfg.Scan.Insecure,
 		AllowPlaintext: cfg.Scan.AllowPlaintext,
+		Warnf: func(format string, args ...any) {
+			warn.Line(console.Warn, format, args...)
+		},
 	})
 	if err != nil {
 		return nil, err

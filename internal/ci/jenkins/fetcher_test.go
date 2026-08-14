@@ -465,3 +465,38 @@ func TestFetcherWarnsAboutAnUnreadableFolder(t *testing.T) {
 		t.Errorf("an unreadable folder must be warned about; warnings: %v", snap.Metadata.Warnings)
 	}
 }
+
+// An operator can give the built-in node any label. A job pinned to that label
+// runs on the controller exactly as one pinned to "built-in" does, and
+// resolving against a hard-coded pair missed every such job.
+func TestFetcherResolvesCustomBuiltInNodeLabels(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/computer/api/json"] = standResponse{body: `{"computer":[
+		{"_class":"hudson.model.Hudson$MasterComputer","displayName":"Built-In Node","offline":false,"numExecutors":2,
+		 "assignedLabels":[{"name":"built-in"},{"name":"controller-only"}]}]}`}
+	s.handlers["/job/build/config.xml"] = standResponse{body: `<?xml version="1.0"?><project>
+		<canRoam>false</canRoam><assignedNode>controller-only</assignedNode></project>`}
+
+	snap := fetchFrom(t, s)
+	if got := snap.Controller.BuiltInNode.Labels; len(got) != 2 {
+		t.Errorf("built-in node labels = %v, want both recorded", got)
+	}
+	job := snap.Jobs[0]
+	if !job.RunsOnBuiltInNode || !job.RunsOnBuiltInNodeKnown {
+		t.Errorf("a job pinned to a custom built-in label runs on the controller: %+v", job)
+	}
+}
+
+// The pair is always included, because the node list may not have been
+// readable — and a job pinned to "master" runs on the controller whether or not
+// the fetcher managed to confirm the label exists.
+func TestFetcherKnowsTheLegacyMasterLabel(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/job/build/config.xml"] = standResponse{body: `<?xml version="1.0"?><project>
+		<canRoam>false</canRoam><assignedNode>master</assignedNode></project>`}
+
+	snap := fetchFrom(t, s)
+	if !snap.Jobs[0].RunsOnBuiltInNode {
+		t.Error(`a job pinned to "master" runs on the controller`)
+	}
+}

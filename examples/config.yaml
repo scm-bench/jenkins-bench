@@ -1,0 +1,68 @@
+# jenkins-bench configuration.
+#
+# Every field is optional: what you leave out keeps its default, so this file
+# only needs to state what you want changed. scan finds it on its own as
+# jenkins-bench.yaml (or .jenkins-bench.yaml) in the working directory, or
+# config.yaml in the user config directory; --config names it explicitly. A
+# single run can override any key without touching the file:
+# --set scan.failOn=none.
+#
+# Sequences are the one exception — YAML replaces a list wholesale rather than
+# merging it, so setting `exclude` replaces the whole list.
+
+# Settings that describe the deployment rather than any one run. No policy reads
+# this section, which is what keeps input.config identical between two runs that
+# differ only in how they were driven.
+scan:
+  # Exit-code thresholds: the severity that fails the run, the minimum
+  # acceptable score (0 disables), and the percentage of controls allowed to go
+  # unevaluated before the scan cannot be trusted (-1 disables).
+  #
+  # maxManual is the one worth setting on Jenkins. Controls that could not be
+  # evaluated are excluded from the score rather than counted against it, so a
+  # token that can read very little produces a high score from a small sample —
+  # and a token without Job/ExtendedRead cannot answer a single job-scope
+  # control. A ceiling here is what turns that into a failure rather than a
+  # clean report.
+  failOn: high
+  failUnder: 0
+  maxManual: -1
+
+  # Transport and pace: parallel job fetches, per-request timeout, and a
+  # whole-scan deadline (0s means none). Each job costs two requests, so
+  # concurrency is what a controller with a thousand jobs notices.
+  concurrency: 8
+  timeout: 30s
+  maxDuration: 0s
+
+  # Weakening transport security is a decision written into a file someone can
+  # review, not a habit of the fingers. allowPlaintext is not needed for
+  # localhost, which is already permitted.
+  insecure: false
+  allowPlaintext: false
+
+# The numeric knobs the policies read, handed to Rego verbatim as input.config
+# so that no control hard-codes a number.
+thresholds:
+  # How stale the controller's cached update-centre data may be before a
+  # control about plugin currency stops trusting it.
+  #
+  # hasUpdate is computed against that cache. A controller that has never
+  # reached updates.jenkins.io — air-gapped, or behind a proxy that never
+  # worked — reports hasUpdate false for every plugin, and a control reading it
+  # would report PASS on an instance that has no idea whether it is out of date.
+  # Past this age the answer is MANUAL.
+  updateSiteMaxAgeDays: 30
+
+# Drop disabled jobs from the scan entirely, rather than reporting NA for each.
+# Off by default: a disabled job is still configuration somebody can re-enable,
+# and a report that silently omits them describes a smaller controller than the
+# one that exists.
+skipDisabledJobs: false
+
+# Controls to leave out, or the only ones to run. A name that matches no control
+# is an error rather than a no-op: an exclude that matches nothing leaves the
+# control running, and an include that matches nothing narrows the scan to
+# nothing. Both look like a successful scan.
+exclude: []
+include: []

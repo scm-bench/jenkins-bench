@@ -12,16 +12,17 @@ import "encoding/xml"
 // There is no securityRealm and no authorizationStrategy: the root /config.xml
 // returns the primary *view*, and tree=securityRealm[*] exports nothing.
 type instance struct {
-	Mode string `json:"mode"`
 	// NumExecutors is the built-in node's executor count. It agrees with the
 	// built-in node's own entry under /computer, so the fetcher has two
 	// independent sources for it.
-	NumExecutors   *int   `json:"numExecutors"`
-	UseSecurity    *bool  `json:"useSecurity"`
-	UseCrumbs      *bool  `json:"useCrumbs"`
-	SlaveAgentPort *int   `json:"slaveAgentPort"`
-	QuietingDown   bool   `json:"quietingDown"`
-	Jobs           []item `json:"jobs"`
+	//
+	// Pointers, all three, because absent and false are different answers: a
+	// controller that did not report useSecurity has not told us security is
+	// off, and the …Known flags in the snapshot exist to carry that difference
+	// through to the policies.
+	NumExecutors *int  `json:"numExecutors"`
+	UseSecurity  *bool `json:"useSecurity"`
+	UseCrumbs    *bool `json:"useCrumbs"`
 }
 
 // item is one entry in a job listing. A folder is an item too.
@@ -43,7 +44,6 @@ type jobListing struct {
 // definition, no sandbox, no authToken, no assignedNode. All of those live in
 // config.xml, which needs Job/ExtendedRead.
 type jobDetail struct {
-	Class     string `json:"_class"`
 	FullName  string `json:"fullName"`
 	Disabled  bool   `json:"disabled"`
 	Buildable bool   `json:"buildable"`
@@ -119,13 +119,13 @@ type credentialDomain struct {
 	Credentials []credential `json:"credentials"`
 }
 
+// credential omits displayName on purpose. Jenkins masks the secret in it —
+// "deployer/****** (…)" — but leaves the username, and a field that is not
+// decoded cannot be carried into a snapshot by accident later.
 type credential struct {
 	ID          string `json:"id"`
 	TypeName    string `json:"typeName"`
 	Description string `json:"description"`
-	// DisplayName is deliberately not carried into the snapshot: Jenkins masks
-	// the secret in it but leaves the username.
-	DisplayName string `json:"displayName"`
 }
 
 // --- config.xml ------------------------------------------------------------
