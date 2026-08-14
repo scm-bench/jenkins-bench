@@ -1,0 +1,28 @@
+README.zh-CN.md
+  s_c41547041c8c0c::t_1854d6a0043e70 1-148
+README.md
+  s_c41547041c8c0c::t_1e305bc75fb5bd 34
+  s_c41547041c8c0c::t_b8955e981bf960 1-22,25-33,36,38-40,42-68,70-77,80-205,207-222
+examples/embed.go
+  s_c41547041c8c0c::t_16e1d04e48800a 5,7-13
+go.mod
+  s_c41547041c8c0c::t_b09d20a261b67f 23,26
+go.sum
+  s_c41547041c8c0c::t_ee28673f9349cd 3-4,11,19-20,23-26,37-38,45-48,63-64,69,81-82,95,125-126,135-136,140-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d4f12c9a77eec2ca3f5923a8262981b3b696dc45",
+  "prompts": {},
+  "sessions": {
+    "s_c41547041c8c0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac392fc3-826e-4ace-a7b5-c23048caa17e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
