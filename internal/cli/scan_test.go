@@ -304,3 +304,38 @@ func TestScanReadsCredentialsFromTheEnvironment(t *testing.T) {
 		t.Errorf("no report:\n%s", out.String())
 	}
 }
+
+// The refusal message names the escape hatch, so both spellings of it must
+// lead somewhere: --set works, and the flag form gets directions instead of
+// cobra's bare "unknown flag". A user followed the old message's advice and
+// hit a dead end.
+func TestAllowPlaintextEscapeHatch(t *testing.T) {
+	// maxDuration bounds the run: an unreachable host is otherwise a full
+	// retry schedule per endpoint. The deadline error proves the point either
+	// way — the scan got past the refusal and out to the network.
+	_, err := runScanCmd(t, "scan", "--url", "http://jenkins.invalid", "--username", "u", "--token", "t",
+		"--set", "scan.allowPlaintext=true", "--set", "scan.maxDuration=2s")
+	if err != nil && strings.Contains(err.Error(), "cleartext") {
+		t.Errorf("--set scan.allowPlaintext=true did not clear the refusal: %v", err)
+	}
+
+	_, err = runScanCmd(t, "scan", "--url", "http://jenkins.invalid", "--allow-plaintext")
+	if err == nil {
+		t.Fatal("the flag form does not exist")
+	}
+	for _, want := range []string{"--set scan.allowPlaintext", "config key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the flag form should get directions containing %q: %v", want, err)
+		}
+	}
+}
+
+func TestRefusalMessageNamesAWorkingEscapeHatch(t *testing.T) {
+	_, err := runScanCmd(t, "scan", "--url", "http://jenkins.example.com", "--username", "u", "--token", "t")
+	if err == nil {
+		t.Fatal("cleartext to a remote host should be refused")
+	}
+	if !strings.Contains(err.Error(), "--set scan.allowPlaintext=true") {
+		t.Errorf("the refusal should name the escape hatch that exists: %v", err)
+	}
+}
