@@ -1,19 +1,16 @@
+# The label set lives once, in scm-bench/.github/labels.json, and this sync
+# pulls from there — no per-repository copy to drift. On a schedule because
+# changes to the central file happen in a different repository, where no push
+# event of ours can see them.
 name: Labels
 
-# Labels are not cosmetic here: .github/release.yml groups the release notes by
-# label, so a label that does not exist means a category that silently never
-# fills. Keeping them in a file makes that reviewable instead of something
-# somebody clicked once.
-
 on:
-  push:
-    branches: [main]
-    paths: [".github/labels.json"]
+  schedule:
+    # Weekly, Monday 04:32 UTC. Off the hour on purpose: scheduled jobs at :00
+    # queue behind everyone else's cron.
+    - cron: "32 4 * * 1"
   workflow_dispatch:
 
-# Declaring a permissions block zeroes every permission not listed, including
-# the contents: read that checkout needs — the first run failed with
-# "Repository not found" for exactly that reason.
 permissions:
   contents: read
   issues: write
@@ -23,42 +20,5 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync:
-    name: Sync labels
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Apply labels.json
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # jq rather than a YAML parser: it ships on the runner image, so this
-          # depends on nothing that has to be installed first.
-          jq -e 'type == "array" and length > 0' .github/labels.json > /dev/null
-
-          jq -r '.[] | [.name, .color, .description] | @tsv' .github/labels.json |
-            while IFS=$'\t' read -r name color description; do
-              # --force updates a label that already exists, which covers the
-              # defaults GitHub creates with every repository.
-              gh label create "$name" \
-                --color "$color" \
-                --description "$description" \
-                --force
-              echo "  $name"
-            done
-
-      - name: Report labels not in the file
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Deliberately reports rather than deletes: removing a label strips it
-          # from every issue that carries it, which is not something a routine
-          # sync should do silently.
-          comm -23 \
-            <(gh label list --limit 200 --json name --jq '.[].name' | sort) \
-            <(jq -r '.[].name' .github/labels.json | sort) \
-            | sed 's/^/  not in labels.json: /'
+  labels:
+    uses: scm-bench/.github/.github/workflows/go-bench-labels.yml@main
