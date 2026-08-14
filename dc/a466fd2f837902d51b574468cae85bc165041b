@@ -1,0 +1,52 @@
+internal/checks/policies/lib/common.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-4,21-23,29-30,36-39
+internal/checks/policies/jenkins/plugin-updates/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-4
+internal/cli/exit.go
+  s_c41547041c8c0c::t_9e8f142140edd3 11-13
+internal/ci/jenkins/fetcher.go
+  s_c41547041c8c0c::t_9d0bf1056ac348 56-58,210-213,258-260,270-271,289-290,344-346,405-408,418-420
+internal/ci/jenkins/client.go
+  s_c41547041c8c0c::t_1a44eb58101f7c 1-3,172-175,193-196
+internal/checks/policies/jenkins/cis-2.1.3/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-3
+internal/checks/policies/jenkins/cis-2.1.6/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-3
+internal/checks/policies/jenkins/cis-2.1.2/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-3
+internal/checks/registry.go
+  s_c41547041c8c0c::t_1a44eb58101f7c 16-19,33-35,81-83,120-122
+  s_c41547041c8c0c::t_9e8f142140edd3 163-164
+internal/ci/snapshot.go
+  s_c41547041c8c0c::t_1a44eb58101f7c 1-2,5-7,60-63
+internal/checks/policies/lib/fixtures_test.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-3,40-42,83-86
+internal/ci/jenkins/models.go
+  s_c41547041c8c0c::t_1a44eb58101f7c 9-11,13-14,66-68,90-93
+internal/checks/policies/jenkins/cis-2.3.1/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-3
+internal/checks/policies/jenkins/cis-2.1.5/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-2
+examples/embed.go
+  s_c41547041c8c0c::t_9e8f142140edd3 1-4
+internal/checks/policies/jenkins/cis-2.2.3/check.rego
+  s_c41547041c8c0c::t_2bf763cb5fd0c2 1-2
+internal/cli/scan.go
+  s_c41547041c8c0c::t_9e8f142140edd3 219-221,303-306,352-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dca466fd2f837902d51b574468cae85bc165041b",
+  "prompts": {},
+  "sessions": {
+    "s_c41547041c8c0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac392fc3-826e-4ace-a7b5-c23048caa17e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
