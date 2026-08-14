@@ -35,23 +35,18 @@ func (p painter) paint(code, s string) string {
 
 // writeTable renders the report in one of two layouts.
 //
-// The default is an overview: the score, the per-resource summary, then one
-// Findings table aggregated by control, so a control that fails identically
-// across fifty jobs reads as the single misconfiguration it is —
-// one row saying 50/50 — instead of appearing once in each of fifty tables.
-// Findings the scan could not read collapse to a single sentence pointing at
-// the scan warnings that explain them.
+// The default is line-oriented, the shape linters use: one record per failure
+// carrying the resource, the control, the reason and the fix together, MANUAL
+// aggregated to a line per control, and the score block last — the verdict is
+// the final thing printed, and every number above it is checkable. Findings
+// the scan could not read collapse to a single sentence pointing at the scan
+// warnings that explain them.
 //
 // Options.Details flips to the per-resource layout, trivy's shape: one
-// section per resource, each a table of what that resource got wrong. That
-// answers the other question a reader arrives with — "what is wrong with *my*
-// job" — without reading anything about anybody else's, and
+// section per resource, each a table of what that resource got wrong, with the
+// full remediation paragraphs at the end. That answers the other question a
+// reader arrives with — "what is wrong with *my* job" — and
 // Options.DetailFilters narrows it to the resources or controls named.
-//
-// The full remediation stays out of the tables in both layouts and keeps its
-// own section at the end. Each fix is a paragraph naming a settings path, and
-// a paragraph does not belong in a cell; the one-line form rides in the
-// Finding column instead.
 func writeTable(w io.Writer, rep *engine.Report, opts Options) error {
 	p := painter{enabled: opts.Color}
 	width := opts.Width
@@ -70,29 +65,26 @@ func writeTable(w io.Writer, rep *engine.Report, opts Options) error {
 
 		writeHeader(w, rep, p, width)
 		writeNotice(w, p, width, opts.Notice)
-		writeSummary(w, rep, p, width)
-		writeReportSummary(w, rep, p, width, opts)
 		writeWarnings(w, rep, p, width)
 		writeResourceSections(w, filtered, p, width, opts)
 		if !opts.NoRemediations {
 			writeRemediations(w, filtered, p, width)
 		}
+		writeSummary(w, rep, p, width)
 		return nil
 	}
 
 	writeHeader(w, rep, p, width)
 	writeNotice(w, p, width, opts.Notice)
-	writeSummary(w, rep, p, width)
-	writeReportSummary(w, rep, p, width, opts)
-	writeFindingsOverview(w, rep, p, width, opts)
-	// After the findings rather than before them: the overview's unread
-	// sentence points here, and on a one-screen report the cause should sit
-	// next to the symptom instead of above the table that hides it.
+	writeFindingLines(w, rep, p, width, opts)
+	// After the findings rather than before them: the unread sentence points
+	// here, and the cause should sit next to the symptom.
 	writeWarnings(w, rep, p, width)
 	if !opts.NoRemediations {
-		writeRemediationSummaries(w, rep, p, width)
+		writeRulesIndex(w, rep, p, width)
 	}
 	writeHint(w, p, width)
+	writeSummary(w, rep, p, width)
 	return nil
 }
 
@@ -385,102 +377,6 @@ func tallyResources(findings []engine.Finding) []resourceTally {
 	return out
 }
 
-// count renders a tally cell. Zero is a dash rather than a nought, which is
-// trivy's idiom and the right one: the eye skips a dash and stops on a digit,
-// so a table of mostly-clean resources shows only the numbers that matter.
-func count(n int) string {
-	if n == 0 {
-		return "-"
-	}
-	return fmt.Sprint(n)
-}
-
-// writeReportSummary is the table that answers "where do I start".
-//
-// The report proper groups by resource, which tells a reader everything about
-// one job and nothing about how it compares. This is the comparison:
-// every resource, worst first, so the instance's shape is visible before any of
-// the detail is.
-func writeReportSummary(w io.Writer, rep *engine.Report, p painter, width int, opts Options) {
-	tallies := tallyResources(rep.Findings)
-	if len(tallies) == 0 {
-		return
-	}
-
-	blank(w)
-	line(w, "%s", p.paint(ansiBold, "Report Summary"))
-	blank(w)
-
-	cols := []console.Column{
-		{Header: "Resource", Align: console.AlignLeft},
-		{Header: "Type", Align: console.AlignLeft, Colour: func(s string) string { return p.paint(ansiDim, s) }},
-		{Header: "Failed", Align: console.AlignRight, Colour: func(s string) string {
-			if s == "-" {
-				return p.paint(ansiDim, s)
-			}
-			return p.paint(ansiRed, s)
-		}},
-		{Header: "Unread", Align: console.AlignRight, Colour: func(s string) string {
-			if s == "-" {
-				return p.paint(ansiDim, s)
-			}
-			return p.paint(ansiYellow, s)
-		}},
-		{Header: "Manual", Align: console.AlignRight, Colour: func(s string) string {
-			if s == "-" {
-				return p.paint(ansiDim, s)
-			}
-			return p.paint(ansiYellow, s)
-		}},
-		{Header: "Passed", Align: console.AlignRight, Colour: func(s string) string {
-			if s == "-" {
-				return p.paint(ansiDim, s)
-			}
-			return p.paint(ansiGreen, s)
-		}},
-	}
-	rows := make([][]string, 0, len(tallies))
-	for _, t := range tallies {
-		row := []string{t.name, t.kind, count(t.failed), count(t.unread), count(t.manual), count(t.passed)}
-		if opts.ShowPassed {
-			row = append(row, count(t.na))
-		}
-		rows = append(rows, row)
-	}
-	if opts.ShowPassed {
-		cols = append(cols, console.Column{Header: "N/A", Align: console.AlignRight,
-			Colour: func(s string) string { return p.paint(ansiDim, s) }})
-	}
-
-	console.RenderTable(w, width, cols, rows)
-
-	// A legend, because a dash, the word UNREAD and the resource named
-	// "controller" are all things the report invents. Everything else in it is
-	// a word the rest of the tool already uses.
-	line(w, "%s", p.paint(ansiDim, "Legend:"))
-	for _, entry := range []string{
-		"'-': none in this state",
-		"'Unread': the scan could not read what the control asks about",
-		"'controller': the Jenkins controller itself — controls that are instance-wide rather than per-job",
-	} {
-		for i, l := range console.Wrap(entry, width-2) {
-			prefix := "- "
-			if i > 0 {
-				prefix = "  "
-			}
-			line(w, "%s", p.paint(ansiDim, prefix+l))
-		}
-	}
-}
-
-// writeWarnings reports on the scan itself rather than on the instance.
-//
-// It is what decides how much of the findings to believe. In the detail
-// layout it comes before them: a 403 that cost the scan a whole folder
-// explains a column of UNREAD several screens further down, and the reader
-// should meet the cause before the symptom. The overview is one screen, so
-// there it sits directly under the sentence that summarises the unread
-// findings and points here.
 func writeWarnings(w io.Writer, rep *engine.Report, p painter, width int) {
 	if len(rep.Metadata.Warnings) > 0 {
 		blank(w)
@@ -713,41 +609,55 @@ func writeRemediations(w io.Writer, findings []engine.Finding, p painter, width 
 	writeRemediationSection(w, p, "Manual review", manuals, full)
 }
 
-// writeRemediationSummaries is the overview's counterpart: one line per
-// control — the one-sentence fix that already rides in the detail tables —
-// with the vendor's documentation page dim underneath it. The full paragraphs
-// are a --details away; ten of them was most of the report by weight, read by
-// someone who had not yet decided which control to act on.
-func writeRemediationSummaries(w io.Writer, rep *engine.Report, p painter, width int) {
+// writeRulesIndex is the default layout's closing reference: one line per
+// failed or manual control, its documentation link dim beside it — the fix
+// already rode with each finding, so all that belongs here is where to read
+// more, and the one hint a single record cannot carry: a control failing on
+// every job is one folder-level setting, not N job-level ones.
+func writeRulesIndex(w io.Writer, rep *engine.Report, p painter, width int) {
 	ordered := remediationOrder(rep.Findings)
-	if len(ordered) == 0 {
-		return
-	}
-	fails, manuals := splitRemediations(ordered)
-	idWidth := remediationIDWidth(ordered)
-	pad := strings.Repeat(" ", idWidth+4)
 	sweeps := fullSweeps(rep.Findings)
 
-	slim := func(f engine.Finding) {
-		id := f.CheckID + strings.Repeat(" ", idWidth-len(f.CheckID))
-		text := fixLine(f)
-		// A control failing on every job, whose full remediation names a
-		// folder-level variant, gets that variant's one-line form here: it is
-		// the single move that fixes the whole row, and slimming the paragraph
-		// had cost exactly this advice.
-		if n := sweeps[f.CheckID]; n > 1 && strings.Contains(f.Remediation, "Folder settings") {
-			text += fmt.Sprintf(" Failing on all %d jobs — setting it once at the folder level covers them together.", n)
-		}
-		prose(w, width, "  "+p.paint(ansiCyan+ansiBold, id)+"  ", idWidth+4, text)
-		// The link is one unbreakable token, printed whole even past the
-		// width — the same policy writeHeader applies to the base URL, and
-		// what Wrap would do with it anyway.
-		if ref := referenceLine(f.References); ref != "" {
-			line(w, "%s%s", pad, p.paint(ansiDim, ref))
-		}
+	type entry struct {
+		id, ref, sweep string
 	}
-	writeRemediationSection(w, p, "Remediations", fails, slim)
-	writeRemediationSection(w, p, "Manual review", manuals, slim)
+	var entries []entry
+	idWidth := 0
+	for _, f := range ordered {
+		e := entry{id: f.CheckID, ref: referenceLine(f.References)}
+		if n := sweeps[f.CheckID]; n > 1 && strings.Contains(f.Remediation, "Folder settings") {
+			e.sweep = fmt.Sprintf("failing on all %d jobs — setting it once at the folder level covers them together.", n)
+		}
+		if e.ref == "" && e.sweep == "" {
+			// A line carrying only its own ID says nothing; the ID is already
+			// on the finding above.
+			continue
+		}
+		if len(e.id) > idWidth {
+			idWidth = len(e.id)
+		}
+		entries = append(entries, e)
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	blank(w)
+	line(w, "%s", p.paint(ansiBold, "Rules"))
+	blank(w)
+	for _, e := range entries {
+		pad := strings.Repeat(" ", idWidth-len(e.id))
+		if e.ref != "" {
+			// The link is one unbreakable token, printed whole even past the
+			// width — the same policy writeHeader applies to the base URL.
+			line(w, "  %s%s  %s", p.paint(ansiCyan+ansiBold, e.id), pad, p.paint(ansiDim, e.ref))
+			if e.sweep != "" {
+				prose(w, width, strings.Repeat(" ", idWidth+4), idWidth+4, e.sweep)
+			}
+			continue
+		}
+		prose(w, width, "  "+p.paint(ansiCyan+ansiBold, e.id)+pad+"  ", idWidth+4, e.sweep)
+	}
 }
 
 func writeRemediationSection(w io.Writer, p painter, heading string, entries []engine.Finding, entry func(engine.Finding)) {
@@ -776,14 +686,35 @@ func splitRemediations(ordered []engine.Finding) (fails, manuals []engine.Findin
 }
 
 // fullSweeps maps CheckID to the job count for controls that failed on every
-// job they were evaluated against — the shape where one
-// project-level setting fixes the whole row. Instance-level controls and
-// partial rows are absent.
+// job they were evaluated against — the shape where one folder-level setting
+// fixes the whole row. Instance-level controls and partial rows are absent.
 func fullSweeps(findings []engine.Finding) map[string]int {
+	type tally struct {
+		applicable, failed int
+		instance           bool
+	}
+	tallies := map[string]*tally{}
+	for _, f := range findings {
+		if f.Status == engine.StatusNA {
+			continue
+		}
+		t, ok := tallies[f.CheckID]
+		if !ok {
+			t = &tally{}
+			tallies[f.CheckID] = t
+		}
+		t.applicable++
+		if f.Status == engine.StatusFail {
+			t.failed++
+		}
+		if f.Resource == engine.InstanceResourceName {
+			t.instance = true
+		}
+	}
 	sweeps := map[string]int{}
-	for _, t := range tallyControls(findings, false) {
-		if t.status == statusFail && !t.instance && t.applicable > 1 && t.affected == t.applicable {
-			sweeps[t.checkID] = t.applicable
+	for id, t := range tallies {
+		if !t.instance && t.applicable > 1 && t.failed == t.applicable {
+			sweeps[id] = t.applicable
 		}
 	}
 	return sweeps
