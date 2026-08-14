@@ -291,7 +291,7 @@ func checkTransport(u *url.URL, allowPlaintext bool) error {
 	// calling this, but an error message about protecting a credential is the
 	// last place that should depend on someone upstream having remembered to.
 	return fmt.Errorf("refusing to send credentials in cleartext to %s\n"+
-		"use https://, or pass --allow-plaintext if this network is genuinely trusted", u.Redacted())
+		"use https://, or override once with --set scan.allowPlaintext=true if this network is genuinely trusted", u.Redacted())
 }
 
 // redactURL renders a URL for an error message with any password removed.

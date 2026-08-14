@@ -102,7 +102,36 @@ token that can read very little is the common case.`,
 	f.BoolVar(&opts.showPassed, "show-passed", false, "include passing controls in the report")
 	f.BoolVar(&opts.noRemediations, "no-remediations", false, "omit the remediation section")
 	f.BoolVar(&opts.noColor, "no-color", false, "disable ANSI colour")
+
+	// Deployment settings live in the config, not in flags — but an error
+	// message or muscle memory that suggests the flag form should meet
+	// directions, not cobra's bare "unknown flag".
+	cmd.SetFlagErrorFunc(movedFlagError)
 	return cmd
+}
+
+// movedFlags maps flag-shaped spellings of config keys to the real key.
+var movedFlags = map[string]string{
+	"fail-on":         "scan.failOn",
+	"fail-under":      "scan.failUnder",
+	"max-manual":      "scan.maxManual",
+	"concurrency":     "scan.concurrency",
+	"timeout":         "scan.timeout",
+	"max-duration":    "scan.maxDuration",
+	"insecure":        "scan.insecure",
+	"allow-plaintext": "scan.allowPlaintext",
+}
+
+// movedFlagError upgrades "unknown flag" for a config-key spelling into the
+// --set form. Anything else passes through untouched.
+func movedFlagError(cmd *cobra.Command, err error) error {
+	msg := err.Error()
+	for flag, key := range movedFlags {
+		if strings.Contains(msg, "--"+flag) {
+			return fmt.Errorf("--%s is a config key, not a flag: set %s in jenkins-bench.yaml, or override once with --set %s=<value>", flag, key, key)
+		}
+	}
+	return err
 }
 
 func runScan(cmd *cobra.Command, opts *scanOptions) error {
