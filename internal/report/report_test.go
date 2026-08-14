@@ -103,12 +103,10 @@ func TestTableShowsTheScoreArithmetic(t *testing.T) {
 
 func TestTableNamesTheControllerResource(t *testing.T) {
 	out := render(t, FormatTable, Options{})
-	if !strings.Contains(out, engine.InstanceResourceName) {
-		t.Errorf("a controller-scope finding should name the controller:\n%s", out)
-	}
-	// The legend explains the invented word, so the two must agree.
-	if strings.Contains(out, "Legend") && !strings.Contains(out, "'"+engine.InstanceResourceName+"'") {
-		t.Errorf("the legend does not explain %q:\n%s", engine.InstanceResourceName, out)
+	// The failing record leads with the resource, and the instance is named
+	// by the word the engine uses everywhere else.
+	if !strings.Contains(out, engine.InstanceResourceName+"  CIS-2.1.6") {
+		t.Errorf("the controller's failure should lead with its name:\n%s", out)
 	}
 }
 
@@ -119,14 +117,17 @@ func TestTableCarriesRemediation(t *testing.T) {
 	}
 }
 
-func TestNoRemediationsDropsTheSection(t *testing.T) {
+func TestNoRemediationsDropsTheFixes(t *testing.T) {
 	with := render(t, FormatTable, Options{})
 	without := render(t, FormatTable, Options{NoRemediations: true})
 	if len(without) >= len(with) {
 		t.Error("--no-remediations should shorten the report")
 	}
-	if strings.Contains(without, "Remediations") {
-		t.Error("the remediation section should be gone")
+	if strings.Contains(without, "fix:") {
+		t.Error("the inline fixes should be gone")
+	}
+	if strings.Contains(without, "Rules") {
+		t.Error("the rules index should be gone")
 	}
 }
 
@@ -269,11 +270,17 @@ func TestDetailsExpandsToPerResourceSections(t *testing.T) {
 		t.Error("--details should change the table body")
 	}
 	// The per-resource layout answers "what is wrong with *my* job", so each
-	// resource that has a finding has to appear by name.
-	for _, resource := range []string{"legacy-build", "platform/api-service"} {
-		if !strings.Contains(details, resource) {
-			t.Errorf("the details layout does not name %q:\n%s", resource, details)
-		}
+	// resource with a failure or open question appears by name — and one whose
+	// only findings passed does not, unless asked for.
+	if !strings.Contains(details, "legacy-build") {
+		t.Errorf("the details layout does not name legacy-build:\n%s", details)
+	}
+	if strings.Contains(details, "platform/api-service") {
+		t.Errorf("a resource with only passing findings should need --show-passed:\n%s", details)
+	}
+	withPassed := render(t, FormatTable, Options{Details: true, ShowPassed: true})
+	if !strings.Contains(withPassed, "platform/api-service") {
+		t.Errorf("--show-passed should surface the passing resource:\n%s", withPassed)
 	}
 }
 
@@ -313,7 +320,7 @@ func TestDetailFilterMatchingNothingIsAnError(t *testing.T) {
 		t.Fatal("a filter matching nothing should be an error, not an empty report")
 	}
 	// The message has to say where to find the names that would have worked.
-	for _, want := range []string{"no-such-job", "Report Summary", "list-checks"} {
+	for _, want := range []string{"no-such-job", "scan output", "list-checks"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error is missing %q: %v", want, err)
 		}
@@ -345,5 +352,155 @@ func TestToolVersionIsStampedIntoSARIF(t *testing.T) {
 	out := render(t, FormatSARIF, Options{ToolVersion: "0.1.0"})
 	if !strings.Contains(out, "0.1.0") {
 		t.Errorf("sarif should carry the tool version:\n%s", out)
+	}
+}
+
+// --- the line-oriented default layout ---------------------------------------
+
+// One record answers the whole question: which resource, which control, how
+// bad, and why — the reason a reader previously had to flip to --details for.
+func TestFailLineCarriesResourceControlSeverityAndDetails(t *testing.T) {
+	out := render(t, FormatTable, Options{})
+	if !strings.Contains(out, "legacy-build  CIS-2.3.1 HIGH: one sentence about this resource") {
+		t.Errorf("the failure record is not one grep-able line:\n%s", out)
+	}
+}
+
+func TestFixRidesIndentedUnderTheFinding(t *testing.T) {
+	out := render(t, FormatTable, Options{})
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, "legacy-build  CIS-2.3.1") {
+			if i+1 >= len(lines) || !strings.HasPrefix(lines[i+1], "    fix: ") {
+				t.Errorf("the fix should be the indented line after the finding, got %q", lines[i+1])
+			}
+			return
+		}
+	}
+	t.Fatalf("no failure record found:\n%s", out)
+}
+
+func TestEvidenceIsIndentedUnderTheFinding(t *testing.T) {
+	rep := sample()
+	rep.Findings[2].Evidence = []string{"authToken present in config.xml"}
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "    · authToken present in config.xml") {
+		t.Errorf("evidence should be an indented bullet:\n%s", buf.String())
+	}
+}
+
+func TestManualAggregatesPerControlWithCount(t *testing.T) {
+	rep := sample()
+	// Automated=false makes these true MANUAL controls; an automated control
+	// reporting MANUAL is unread and folds into the one-sentence summary.
+	for i := range rep.Findings {
+		if rep.Findings[i].Status == engine.StatusManual {
+			rep.Findings[i].Automated = false
+		}
+	}
+	extra := finding("CIS-2.3.5", "another-job", engine.ResourceJob, engine.StatusManual, "MEDIUM")
+	extra.Automated = false
+	rep.Findings = append(rep.Findings, extra)
+	rep.Score = engine.Compute(rep.Findings)
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "CIS-2.3.5 MANUAL (2 jobs): ") {
+		t.Errorf("two same-reason MANUAL findings should fold to one counted line:\n%s", out)
+	}
+	if strings.Count(out, "CIS-2.3.5 MANUAL") != 1 {
+		t.Errorf("the group should render exactly once:\n%s", out)
+	}
+}
+
+// Two different reasons must not collapse under whichever came first.
+func TestManualGroupSplitsOnDifferentDetails(t *testing.T) {
+	rep := sample()
+	for i := range rep.Findings {
+		if rep.Findings[i].Status == engine.StatusManual {
+			rep.Findings[i].Automated = false
+		}
+	}
+	other := finding("CIS-2.3.5", "another-job", engine.ResourceJob, engine.StatusManual, "MEDIUM")
+	other.Automated = false
+	other.Details = "a different reason entirely"
+	rep.Findings = append(rep.Findings, other)
+	rep.Score = engine.Compute(rep.Findings)
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(buf.String(), "CIS-2.3.5 MANUAL") != 2 {
+		t.Errorf("different reasons should keep their own lines:\n%s", buf.String())
+	}
+}
+
+// The verdict is the last thing printed; every number above it is checkable on
+// the way down.
+func TestScoreTrailerEndsTheReport(t *testing.T) {
+	out := render(t, FormatTable, Options{})
+	scoreAt := strings.LastIndex(out, "SCORE ")
+	if scoreAt < 0 {
+		t.Fatalf("no score block:\n%s", out)
+	}
+	for _, section := range []string{"CIS-2.3.1", "fix: ", "Rules"} {
+		if at := strings.Index(out, section); at > scoreAt {
+			t.Errorf("%q appears after the score trailer", section)
+		}
+	}
+	// Nothing but the score block's own lines after it.
+	tail := out[scoreAt:]
+	if strings.Contains(tail, "fix: ") || strings.Contains(tail, "MANUAL (") {
+		t.Errorf("the trailer should close the report:\n%s", tail)
+	}
+}
+
+func TestRulesIndexListsEachFailedControlOnce(t *testing.T) {
+	out := render(t, FormatTable, Options{})
+	at := strings.Index(out, "Rules")
+	if at < 0 {
+		t.Fatalf("no rules index:\n%s", out)
+	}
+	tail := out[at:]
+	// Two failing controls, one line each — the fixture gives both the same
+	// URL, so count IDs rather than links.
+	for _, id := range []string{"CIS-2.1.6", "CIS-2.3.1"} {
+		if strings.Count(tail, id) != 1 {
+			t.Errorf("%s should appear exactly once in the rules index:\n%s", id, tail)
+		}
+	}
+}
+
+// Every line fits the terminal, except lines carrying a single unbreakable
+// token (a URL, a long resource name) that no wrap could improve.
+func TestEveryLineFitsTheTerminalWidth(t *testing.T) {
+	const width = 80
+	rep := sample()
+	rep.Findings[2].Evidence = []string{"an authentication token is set under Build Triggers"}
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: width}); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if len(l) <= width {
+			continue
+		}
+		// An unbreakable token exemption: the overflowing part must contain no
+		// spaces after the wrap point, i.e. the line has at most one long word.
+		fields := strings.Fields(l)
+		longest := 0
+		for _, f := range fields {
+			if len(f) > longest {
+				longest = len(f)
+			}
+		}
+		if longest <= width/2 {
+			t.Errorf("line overflows %d columns without an unbreakable token: %q", width, l)
+		}
 	}
 }
