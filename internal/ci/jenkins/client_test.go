@@ -36,7 +36,7 @@ func TestNewClientRefusesCleartextToARemoteHost(t *testing.T) {
 	if err == nil {
 		t.Fatal("cleartext to a remote host was accepted")
 	}
-	if !strings.Contains(err.Error(), "cleartext") || !strings.Contains(err.Error(), "--allow-plaintext") {
+	if !strings.Contains(err.Error(), "cleartext") || !strings.Contains(err.Error(), "--set scan.allowPlaintext") {
 		t.Errorf("the error should say what to do: %v", err)
 	}
 
