@@ -2,13 +2,15 @@
 //
 // These files began as things this repository carries for people reading it on
 // GitHub — but a file in a git checkout helps nobody who installed a release
-// binary, which is exactly the person who has not seen a report yet.
+// binary, which is exactly the person `jenkins-bench init` exists for.
 //
-// They stay checked in here rather than moving next to the CLI, because they
-// are also documentation: the README points at them, and
-// `--snapshot-in examples/snapshot.json` remains a way to evaluate the sample
-// from a checkout. Embedding from where they already live keeps one copy, and
-// keeps `jenkins-bench init` from drifting away from the file the README shows.
+// config.yaml stays checked in here rather than moving next to the CLI,
+// because it is also documentation: the README points at it, and embedding
+// from where it already lives keeps `init` from drifting away from the file
+// the README shows. snapshot.json is deliberately NOT embedded: nothing in the
+// binary consumes it yet — it exists for `--snapshot-in examples/snapshot.json`
+// from a checkout and as the release archives' sample — and an embed with no
+// consumer is dead weight that reads like a feature.
 package examples
 
 import _ "embed"
@@ -18,8 +20,3 @@ import _ "embed"
 //
 //go:embed config.yaml
 var ConfigYAML []byte
-
-// SnapshotJSON is examples/snapshot.json, byte for byte.
-//
-//go:embed snapshot.json
-var SnapshotJSON []byte
