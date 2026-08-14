@@ -36,6 +36,14 @@ list(path) := value if {
 	is_array(value)
 } else := []
 
+# list_from is list() for a document other than the resource — the config,
+# usually. Same trap, same cure: a nil Go slice marshals to null, and a rule
+# that passes null to count or iteration goes undefined and reports nothing.
+list_from(doc, key) := value if {
+	value := object.get(doc, key, [])
+	is_array(value)
+} else := []
+
 # known reports whether a field that has a legitimate zero or false was actually
 # measured. The argument is the value's path; the flag is its sibling with
 # "Known" appended.

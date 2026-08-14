@@ -1,0 +1,17 @@
+{
+  "id": "CIS-2.1.3",
+  "cisId": "2.1.3",
+  "package": "scmbench.rules.cis_2_1_3",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": ["jenkins"],
+  "automated": true,
+  "title": "Ensure the build environment is logged",
+  "description": "Jenkins keeps build logs, but it has no built-in audit of the environment itself: who changed a job, who ran what, who logged in. Without a plugin recording that, an incident investigation has build output and nothing else. Which plugin satisfies this is deployment-specific, so the accepted set is the auditPluginNames config key.",
+  "remediation": "Install and enable an audit plugin — audit-trail records who did what to a local log or syslog, and shippers like logstash or splunk-devops forward activity to a central store, which is what the control's \"centralized organizational log store\" clause asks for. Manage Jenkins -> Plugins -> Available. If your deployment audits by other means (a reverse proxy access log, an OS-level agent), add its plugin name to auditPluginNames in the config, or accept the finding.",
+  "fixSummary": "Install an audit plugin such as audit-trail at Manage Jenkins -> Plugins.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://plugins.jenkins.io/audit-trail/"
+  ]
+}

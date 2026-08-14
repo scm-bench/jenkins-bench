@@ -1,0 +1,18 @@
+{
+  "id": "CIS-2.3.4",
+  "cisId": "2.3.4",
+  "package": "scmbench.rules.cis_2_3_4",
+  "scope": "job",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure changes to pipeline files are tracked and reviewed",
+  "description": "A Jenkinsfile decides what runs with the pipeline's credentials, so an unreviewed change to it is an unreviewed change to the build itself. Tracking is visible from here — a job reading its definition from SCM has it — but whether changes are reviewed is branch protection on the repository, which is the SCM platform's to answer, not the controller's.",
+  "remediation": "Keep every pipeline definition in version control (CIS-2.3.1 reports the jobs that are not there yet), then protect it where it lives: require pull-request review in the repository's branch protection settings, on the branch the Jenkinsfile is read from, with the pipeline's own maintainers as owners of that path. An SCM bench in this family can verify that half — on Bitbucket, its CIS-1.1.3 and 1.1.4 are exactly this check.",
+  "fixSummary": "Require PR review in the SCM platform's branch protection settings for Jenkinsfiles.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security"
+  ]
+}

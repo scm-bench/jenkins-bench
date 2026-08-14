@@ -1,0 +1,18 @@
+{
+  "id": "CIS-2.2.4",
+  "cisId": "2.2.4",
+  "package": "scmbench.rules.cis_2_2_4",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure build workers have minimal network connectivity",
+  "description": "A build worker that can reach the whole network turns every malicious build into a pivot point. Worker network policy lives in firewalls, security groups and cluster policy — none of it visible to the controller.",
+  "remediation": "Restrict each agent's egress to what builds actually need: the controller, the source host, the artifact store and approved package mirrors. Enforce it outside the worker — security groups, network policy, or a proxy — so a compromised build cannot lift the restriction.",
+  "fixSummary": "Restrict agent egress with security groups to the controller, SCM and package mirrors.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security"
+  ]
+}

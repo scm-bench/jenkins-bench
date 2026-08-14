@@ -1,0 +1,19 @@
+{
+  "id": "CIS-2.2.1",
+  "cisId": "2.2.1",
+  "package": "scmbench.rules.cis_2_2_1",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure build workers are single-used",
+  "description": "A worker reused across builds carries the previous build's workspace, caches and any implants a malicious build left behind. Whether agents are ephemeral is a property of how they are provisioned — a cloud plugin, Kubernetes pods, static VMs — which the node list does not reveal.",
+  "remediation": "Provision agents so each build starts clean — configure a cloud at Manage Jenkins -> Clouds: one-shot containers or pods (the kubernetes plugin's default), cloud agents with a low retention, or VM images reset between builds. Static agents that persist for months are the shape to move away from; where they must stay, wipe workspaces between builds and treat them as long-lived credential holders.",
+  "fixSummary": "Provision one-shot agents at Manage Jenkins -> Clouds (containers, pods, reset VMs).",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://plugins.jenkins.io/kubernetes/"
+  ]
+}

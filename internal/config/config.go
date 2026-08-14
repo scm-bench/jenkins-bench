@@ -27,6 +27,12 @@ type Config struct {
 	Scan Scan `yaml:"scan" json:"-"`
 	// Thresholds are the numeric knobs used by the policies.
 	Thresholds Thresholds `yaml:"thresholds" json:"thresholds"`
+	// AuditPluginNames are plugin shortNames that count as build-environment
+	// audit logging. Jenkins has no built-in audit log, so which plugin
+	// satisfies CIS 2.1.3 is deployment-specific: audit-trail writes who did
+	// what, and the log shippers forward build activity to a central store.
+	// Matched exactly against shortName, not as substrings.
+	AuditPluginNames []string `yaml:"auditPluginNames" json:"auditPluginNames"`
 	// SkipDisabledJobs drops disabled jobs from the scan entirely, rather than
 	// reporting NA for each of them. Off by default: a disabled job is still
 	// configuration somebody can re-enable, and a report that silently omits
@@ -121,6 +127,14 @@ func Default() Config {
 		},
 		Thresholds: Thresholds{
 			UpdateSiteMaxAgeDays: 30,
+		},
+		AuditPluginNames: []string{
+			"audit-trail",
+			"audit-log",
+			"logstash",
+			"splunk-devops",
+			"datadog",
+			"opentelemetry",
 		},
 	}
 }
@@ -272,6 +286,7 @@ func (c Config) Validate() error {
 		field string
 		items []string
 	}{
+		{"auditPluginNames", c.AuditPluginNames},
 		{"exclude", c.Exclude},
 		{"include", c.Include},
 	} {

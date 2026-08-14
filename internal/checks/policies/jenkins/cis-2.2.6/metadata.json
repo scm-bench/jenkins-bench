@@ -1,0 +1,18 @@
+{
+  "id": "CIS-2.2.6",
+  "cisId": "2.2.6",
+  "package": "scmbench.rules.cis_2_2_6",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure build workers are automatically scanned for vulnerabilities",
+  "description": "Workers run other people's code by design, so a known-vulnerable kernel or runtime on one is an escalation waiting for its build to arrive. Whatever scans them — image scanning in a registry, host agents — reports somewhere other than the Jenkins API.",
+  "remediation": "Scan the sources workers are built from, automatically: container images in the registry pipeline (and gate agent templates on the result), VM images with the platform's assessment tooling, long-lived hosts with a scanning agent. Wire findings to rebuilds, so a vulnerable worker's remaining lifetime is one provisioning cycle.",
+  "fixSummary": "Scan agent images in the registry and rebuild on findings.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security"
+  ]
+}

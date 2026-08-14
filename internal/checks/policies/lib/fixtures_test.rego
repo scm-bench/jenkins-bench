@@ -9,7 +9,17 @@ package scmbench.testdata
 
 import rego.v1
 
-config := {"thresholds": {}}
+config := {
+	"thresholds": {"updateSiteMaxAgeDays": 30},
+	"auditPluginNames": [
+		"audit-trail",
+		"audit-log",
+		"logstash",
+		"splunk-devops",
+		"datadog",
+		"opentelemetry",
+	],
+}
 
 # controller_available lists the instance-level fetches a rule may ask about.
 # Tests start from all of them succeeding and switch off the one under

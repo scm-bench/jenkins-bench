@@ -1,0 +1,18 @@
+{
+  "id": "CIS-2.1.1",
+  "cisId": "2.1.1",
+  "package": "scmbench.rules.cis_2_1_1",
+  "scope": "job",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure each pipeline has a single responsibility",
+  "description": "A pipeline that tests, builds and deploys holds the union of those credentials, and a compromise of any stage reaches all of them. No API can judge what a pipeline is for, so this is a review, not a scan.",
+  "remediation": "Review what this job does end to end, at Configure -> Pipeline or in its Jenkinsfile. If it carries more than one responsibility — building and deploying, say — split it into separate jobs, each holding only the credentials its own stage needs, chained by triggering the next stage rather than sharing one credential set.",
+  "fixSummary": "Review the job's Pipeline settings and split multi-purpose stages into separate jobs.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security"
+  ]
+}

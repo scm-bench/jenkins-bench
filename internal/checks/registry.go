@@ -178,7 +178,20 @@ func Load() (*Bundle, error) {
 	}
 
 	sort.Slice(bundle.Checks, func(i, j int) bool {
-		return LessCISID(bundle.Checks[i].CISID, bundle.Checks[j].CISID)
+		a, b := bundle.Checks[i], bundle.Checks[j]
+		// Controls without a benchmark number sort after those with one: they
+		// are supplements to the mapping, not part of it, and a reader scanning
+		// the list in benchmark order should meet the benchmark first. Among
+		// themselves they order by ID so the listing stays deterministic.
+		switch {
+		case a.CISID == "" && b.CISID == "":
+			return a.ID < b.ID
+		case a.CISID == "":
+			return false
+		case b.CISID == "":
+			return true
+		}
+		return LessCISID(a.CISID, b.CISID)
 	})
 	sort.Slice(bundle.Modules, func(i, j int) bool {
 		return bundle.Modules[i].Path < bundle.Modules[j].Path

@@ -1,0 +1,17 @@
+{
+  "id": "CIS-2.2.3",
+  "cisId": "2.2.3",
+  "package": "scmbench.rules.cis_2_2_3",
+  "scope": "controller",
+  "severity": "HIGH",
+  "platforms": ["jenkins"],
+  "automated": true,
+  "title": "Ensure the duties of each build worker are segregated",
+  "description": "The controller's duty is orchestration: it holds every credential, every job configuration and the plugin runtime. A build that runs on it — which is what executors on the built-in node allow — mixes the most privileged component into the least trusted work, and any build step can then read secrets from disk and rewrite the controller's own configuration.",
+  "remediation": "Manage Jenkins -> Nodes -> Built-In Node -> Configure: set \"Number of executors\" to 0, and attach agents to run builds instead. Jobs pinned to the built-in node by label will queue forever afterwards and need their label expression pointed at an agent. This is the first recommendation of the Jenkins hardening guide, and the one that contains every malicious-build scenario.",
+  "fixSummary": "Set the built-in node's executors to 0 at Manage Jenkins -> Nodes -> Built-In Node.",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://www.jenkins.io/doc/book/security/controller-isolation/"
+  ]
+}

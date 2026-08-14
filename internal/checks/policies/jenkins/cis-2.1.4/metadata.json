@@ -1,0 +1,19 @@
+{
+  "id": "CIS-2.1.4",
+  "cisId": "2.1.4",
+  "package": "scmbench.rules.cis_2_1_4",
+  "scope": "controller",
+  "severity": "MEDIUM",
+  "platforms": [
+    "jenkins"
+  ],
+  "automated": false,
+  "title": "Ensure the creation of the build environment is automated",
+  "description": "A controller built by hand cannot be rebuilt in an emergency, and its configuration exists nowhere but on the instance an attacker just modified. Automation is observable only from outside the controller — the JCasC plugin being active is a strong hint, but its absence proves nothing about images or provisioning tools.",
+  "remediation": "Manage the controller with configuration-as-code: the JCasC plugin (Manage Jenkins -> Configuration as Code) with its YAML in version control, a baked image, or a provisioning tool. What matters is that a fresh, identical controller can be produced from versioned sources without copying anything off the old one.",
+  "fixSummary": "Manage controller config as code: Manage Jenkins -> Configuration as Code (JCasC).",
+  "references": [
+    "https://www.cisecurity.org/benchmark/software-supply-chain-security",
+    "https://plugins.jenkins.io/configuration-as-code/"
+  ]
+}

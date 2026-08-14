@@ -185,6 +185,13 @@ func TestScoreIsZeroWhenNothingWasDecidable(t *testing.T) {
 	snap := hardenedSnapshot()
 	snap.Controller.Available = map[string]bool{}
 	snap.Controller.Security = ci.Security{}
+	snap.Controller.BuiltInNode = ci.BuiltInNode{}
+	// The jobs too: a snapshot is only "nothing decidable" when no resource
+	// kept a readable fetch, and the job-scope controls read the jobs.
+	for i := range snap.Jobs {
+		snap.Jobs[i].Available = map[string]bool{}
+		snap.Jobs[i].Definition = ci.Definition{}
+	}
 
 	rep := evaluate(t, config.Default(), snap)
 	if rep.Score.Passed+rep.Score.Failed != 0 {

@@ -153,3 +153,22 @@ test_cfg_is_the_config_document if {
 	c := lib.cfg with input as {"resource": {}, "config": {"thresholds": {"example": 3}}}
 	c.thresholds.example == 3
 }
+
+# --- list_from -------------------------------------------------------------
+
+test_list_from_reads_a_config_list if {
+	got := lib.list_from({"auditPluginNames": ["audit-trail"]}, "auditPluginNames")
+	count(got) == 1
+}
+
+# The same null trap as list(): a nil Go slice marshals to null, and a rule
+# iterating null goes undefined and reports nothing.
+test_list_from_treats_null_as_missing if {
+	got := lib.list_from({"auditPluginNames": null}, "auditPluginNames")
+	got == []
+}
+
+test_list_from_substitutes_for_a_missing_key if {
+	got := lib.list_from({}, "auditPluginNames")
+	got == []
+}

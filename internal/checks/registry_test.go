@@ -63,15 +63,28 @@ func TestRemediationSaysWhereToAct(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	// The categories below are this domain's places to act. The reference
+	// implementation needed only the first three, because every Bitbucket fix
+	// is a settings path — but half of a Jenkins controller's remediation
+	// happens outside the controller, and "configure your security groups" is
+	// as concrete as a UI path without ever containing "->".
 	namesALocation := func(remediation string) bool {
 		lower := strings.ToLower(remediation)
 		switch {
-		case strings.Contains(remediation, "->"): // a settings path
+		case strings.Contains(remediation, "->"): // a UI settings path
 			return true
 		case strings.Contains(remediation, ".md"): // a file to add
 			return true
 		case strings.Contains(lower, "no action applies"), strings.Contains(remediation, "无需处理"):
 			// The control is NA; saying so plainly is the correct remediation.
+			return true
+		case strings.Contains(lower, "system property"): // startup configuration
+			return true
+		case strings.Contains(lower, "settings"): // a named settings page, wherever it lives
+			return true
+		case strings.Contains(lower, "registry"): // the image or artifact registry
+			return true
+		case strings.Contains(lower, "security group"): // the network boundary around agents
 			return true
 		}
 		return false
@@ -117,10 +130,15 @@ func TestChecksAreSortedByBenchmarkNumber(t *testing.T) {
 	// two IDs that must be in it: the ordering is the property, and a test
 	// pinned to specific controls stops testing it the moment they change.
 	// TestLessCISID covers the numeric-versus-lexical case that motivates it.
+	// Controls without a benchmark number are supplements and sort after the
+	// mapping, so a reader meets the benchmark first.
 	for i := 1; i < len(bundle.Checks); i++ {
-		prev, cur := bundle.Checks[i-1].CISID, bundle.Checks[i].CISID
-		if LessCISID(cur, prev) {
-			t.Errorf("bundle is out of benchmark order: %s comes before %s", prev, cur)
+		prev, cur := bundle.Checks[i-1], bundle.Checks[i]
+		switch {
+		case prev.CISID == "" && cur.CISID != "":
+			t.Errorf("supplementary %s sorts before mapped %s", prev.ID, cur.ID)
+		case prev.CISID != "" && cur.CISID != "" && LessCISID(cur.CISID, prev.CISID):
+			t.Errorf("bundle is out of benchmark order: %s comes before %s", prev.CISID, cur.CISID)
 		}
 	}
 }

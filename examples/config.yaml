@@ -54,6 +54,20 @@ thresholds:
   # Past this age the answer is MANUAL.
   updateSiteMaxAgeDays: 30
 
+# Plugin shortNames that satisfy the build-environment logging control
+# (CIS-2.1.3). Jenkins has no built-in audit log, so which plugin counts is
+# deployment-specific: audit-trail records who did what, and the shippers
+# forward activity to a central store. Matched exactly, not as substrings —
+# and remember YAML replaces a list wholesale, so restate the defaults you
+# want to keep when adding your own.
+auditPluginNames:
+  - audit-trail
+  - audit-log
+  - logstash
+  - splunk-devops
+  - datadog
+  - opentelemetry
+
 # Drop disabled jobs from the scan entirely, rather than reporting NA for each.
 # Off by default: a disabled job is still configuration somebody can re-enable,
 # and a report that silently omits them describes a smaller controller than the

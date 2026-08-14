@@ -51,6 +51,9 @@ func TestExampleConfigMatchesTheDefaults(t *testing.T) {
 	if cfg.SkipDisabledJobs != want.SkipDisabledJobs {
 		t.Errorf("skipDisabledJobs = %v, want the default %v", cfg.SkipDisabledJobs, want.SkipDisabledJobs)
 	}
+	if len(cfg.AuditPluginNames) != len(want.AuditPluginNames) {
+		t.Errorf("auditPluginNames = %v, want the defaults %v", cfg.AuditPluginNames, want.AuditPluginNames)
+	}
 }
 
 func TestExampleSnapshotIsCurrent(t *testing.T) {
