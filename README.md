@@ -7,9 +7,9 @@
 -->
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/scm-bench/.github/main/brand/banner-dark-1760x440.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/scm-bench/.github/main/brand/banner-light-1760x440.png">
-    <img src="https://raw.githubusercontent.com/scm-bench/.github/main/brand/banner-light-1760x440.png" alt="scm-bench — audit the software supply chain against the CIS benchmark" width="880">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/scm-bench/.github/main/brand/banner-jenkins-bench-dark-1760x440.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/scm-bench/.github/main/brand/banner-jenkins-bench-light-1760x440.png">
+    <img src="https://raw.githubusercontent.com/scm-bench/.github/main/brand/banner-jenkins-bench-light-1760x440.png" alt="jenkins-bench — audit a Jenkins controller against the CIS supply chain benchmark" width="880">
   </picture>
 </p>
 
