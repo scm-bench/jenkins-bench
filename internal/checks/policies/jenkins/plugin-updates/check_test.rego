@@ -84,3 +84,34 @@ test_produces_a_verdict_for_an_empty_controller if {
 	r := rule.result with input as testdata.input_for({})
 	r.status == "MANUAL"
 }
+
+# A snapshot with no capture time cannot date the update-centre data, and an
+# undefined age must not slip past the stale branch into a PASS.
+test_manual_when_the_capture_time_is_missing if {
+	r := rule.result with input as testdata.controller_input({
+		"updateSite": {
+			"dataTimestamp": "2020-01-01T00:00:00Z",
+			"dataTimestampKnown": true,
+		},
+		"plugins": [{"shortName": "git", "hasUpdate": false, "active": true}],
+	})
+	r.status == "MANUAL"
+	contains(r.details, "capture time")
+}
+
+# Go marshals an unset time.Time as the year-one zero time, which parses fine
+# and would make six-year-old data look younger than the capture.
+test_manual_when_the_capture_time_is_the_zero_time if {
+	r := rule.result with input as object.union(
+		testdata.controller_input({
+			"updateSite": {
+				"dataTimestamp": "2020-01-01T00:00:00Z",
+				"dataTimestampKnown": true,
+			},
+			"plugins": [{"shortName": "git", "hasUpdate": false, "active": true}],
+		}),
+		{"metadata": {"generatedAt": "0001-01-01T00:00:00Z"}},
+	)
+	r.status == "MANUAL"
+	contains(r.details, "capture time")
+}

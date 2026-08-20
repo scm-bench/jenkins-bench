@@ -244,6 +244,12 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 		return nil, fmt.Errorf("a controller URL is required: pass --url or set JENKINS_URL\n" +
 			"or evaluate a snapshot you already have with --snapshot-in")
 	}
+	if token != "" && username == "" {
+		// An API token is per-user; without the username the client would
+		// send no Authorization header at all and the scan would silently run
+		// anonymously — an all-MANUAL report with nothing pointing here.
+		return nil, fmt.Errorf("--token needs the user it belongs to: pass --username or set JENKINS_USER")
+	}
 
 	// Warnings go to stderr as they happen, not only into the snapshot —
 	// "your token cannot read this" said only inside a JSON field reads as a
@@ -293,12 +299,17 @@ func readSnapshot(path string) (*ci.Snapshot, error) {
 	if err := json.Unmarshal(body, &snapshot); err != nil {
 		return nil, fmt.Errorf("parse snapshot %s: %w", path, err)
 	}
-	if snapshot.SchemaVersion != "" && snapshot.SchemaVersion != ci.SchemaVersion {
+	if snapshot.SchemaVersion != ci.SchemaVersion {
 		// A snapshot from a different shape is not a snapshot this build can
 		// reason about, and reading it anyway would produce verdicts about
-		// fields that have moved.
+		// fields that have moved. Strict equality, so a file that merely
+		// parses as JSON — with no schemaVersion at all — is refused rather
+		// than evaluated into a page of MANUALs and a clean exit.
 		return nil, fmt.Errorf("snapshot %s has schemaVersion %q; this build reads %q",
 			path, snapshot.SchemaVersion, ci.SchemaVersion)
+	}
+	if snapshot.Metadata.Platform == "" {
+		return nil, fmt.Errorf("snapshot %s does not record which platform it came from", path)
 	}
 	return &snapshot, nil
 }
@@ -348,16 +359,28 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 	}
 
 	if opts.scan.MaxManual >= 0 {
-		decidable := rep.Score.Passed + rep.Score.Failed + rep.Score.Manual
-		if decidable > 0 {
-			percent := rep.Score.Manual * 100 / decidable
-			if percent > opts.scan.MaxManual {
-				return &exitCodeError{
-					code: ExitFindings,
-					msg: fmt.Sprintf("%d%% of controls need manual review (scan.maxManual %d%%); the scan could not see enough to judge this controller\n"+
-						"grant the token more read access, or raise scan.maxManual if this is expected",
-						percent, opts.scan.MaxManual),
-				}
+		// Only automated controls count against the gate. The bundle ships
+		// controls that are MANUAL by design (automated: false, no API can
+		// answer them); counting those would give every scan — even one with
+		// an administrator token — a manual floor of roughly forty percent
+		// that no amount of read access can lower, and the advice below would
+		// be a lie. What the gate measures is what the token failed to read.
+		unread := 0
+		for _, f := range rep.Findings {
+			if f.Status == engine.StatusManual && f.Automated {
+				unread++
+			}
+		}
+		decidable := rep.Score.Passed + rep.Score.Failed + unread
+		// Cross-multiplied rather than divided, so the comparison is exact:
+		// integer division floors, and flooring made maxManual 0 tolerate a
+		// manual finding whenever there were more than a hundred findings.
+		if decidable > 0 && unread*100 > opts.scan.MaxManual*decidable {
+			return &exitCodeError{
+				code: ExitFindings,
+				msg: fmt.Sprintf("%d of %d automatable findings needed manual review (scan.maxManual %d%%); the scan could not see enough to judge this controller\n"+
+					"grant the token more read access, or raise scan.maxManual if this is expected",
+					unread, decidable, opts.scan.MaxManual),
 			}
 		}
 	}

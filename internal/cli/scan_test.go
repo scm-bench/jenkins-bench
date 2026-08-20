@@ -238,11 +238,44 @@ func TestScanFailsWhenTooMuchWentUnread(t *testing.T) {
 
 func TestScanRejectsAnUnknownFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","controller":{"available":{}}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","metadata":{"platform":"jenkins"},"controller":{"available":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "--format", "yaml"); err == nil {
 		t.Error("an unknown format should be rejected")
+	}
+}
+
+// A file that merely parses as JSON is not a snapshot. Accepting it would
+// evaluate an empty controller into a page of MANUALs with a clean exit code,
+// which reads exactly like a real least-privilege scan.
+func TestScanRejectsAFileThatIsNotASnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	if err := os.WriteFile(path, []byte(`{"broken":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runScanCmd(t, "scan", "--snapshot-in", path)
+	if err == nil {
+		t.Fatal("a JSON file without a schemaVersion must be refused")
+	}
+	if !strings.Contains(err.Error(), "schemaVersion") {
+		t.Errorf("the error should name what is missing: %v", err)
+	}
+}
+
+// A snapshot that does not say which platform it came from cannot be matched
+// against this bench's controls.
+func TestScanRejectsASnapshotWithoutAPlatform(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","controller":{"available":{}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runScanCmd(t, "scan", "--snapshot-in", path)
+	if err == nil {
+		t.Fatal("a snapshot without a platform must be refused")
+	}
+	if !strings.Contains(err.Error(), "platform") {
+		t.Errorf("the error should say what is missing: %v", err)
 	}
 }
 

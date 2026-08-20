@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -13,6 +14,20 @@ import (
 
 	"github.com/scm-bench/jenkins-bench/internal/ci"
 )
+
+// deniedNotBroken reports whether err is the controller answering "you may not
+// read this" — the case the whole scan is built to degrade through — as
+// opposed to the scan not getting an answer it could reason about. 404 and 405
+// count as denials because what a controller means by them is not reliably
+// different from 403: an absent plugin and an unreadable store both answer
+// 404.
+func deniedNotBroken(err error) bool {
+	switch Status(err) {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
+		return true
+	}
+	return false
+}
 
 // Availability keys. A policy reads these through lib.available, so the names
 // are part of the fetcher/policy contract and not an implementation detail.
@@ -101,6 +116,22 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return nil, ctx.Err()
+	case err != nil && f.client.HasCredentials() && Status(err) == http.StatusUnauthorized:
+		// A 401 on the authenticated read means the token itself was rejected.
+		// Without this, a mistyped token produces a complete-looking report —
+		// every control MANUAL, score 0, exit 0 — which is indistinguishable
+		// from a real result unless the reader notices that *everything* is
+		// MANUAL. The worst possible output for an audit tool, so it fails
+		// instead.
+		return nil, fmt.Errorf("the controller rejected the credentials: %w\n"+
+			"check --username/--token (JENKINS_USER/JENKINS_TOKEN); use an API token, not a password", err)
+	case err != nil && !deniedNotBroken(err):
+		// No answer at all — connection refused, DNS, TLS, a 5xx that survived
+		// the retries, or a response that is not the Jenkins API. A permission
+		// denial degrades to MANUAL below because a scan can still say
+		// something; a scan that got nothing to reason about must fail rather
+		// than render a clean-looking report of MANUALs and exit 0.
+		return nil, fmt.Errorf("the controller could not be read: %w", err)
 	case err != nil:
 		// Not fatal. A controller that denies the instance API still has a
 		// version and can still be probed anonymously, and a snapshot saying
@@ -280,7 +311,7 @@ func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) erro
 		return nil
 	}
 	for _, it := range listing.Jobs {
-		if it.Class == classFolder {
+		if isContainer(it.Class) {
 			if err := f.listJobs(ctx, jobPath(it.FullName), out); err != nil {
 				return err
 			}
@@ -443,6 +474,14 @@ func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Contro
 	}
 	assigned := strings.TrimSpace(cfg.AssignedNode)
 	switch {
+	case assigned != "" && isLabelExpression(assigned):
+		// <assignedNode> can hold a label expression — "built-in || linux",
+		// "!windows && x86" — and this fetcher does not evaluate those.
+		// Recording false for one would assert, as measured fact, that a job
+		// which may well run on the controller cannot; unknown is the honest
+		// answer, and the policy reports MANUAL from it.
+		job.RunsOnBuiltInNodeKnown = false
+		return
 	case assigned != "":
 		job.RunsOnBuiltInNode = builtInLabels[strings.ToLower(assigned)]
 	default:
@@ -451,6 +490,14 @@ func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Contro
 		job.RunsOnBuiltInNode = cfg.CanRoam == "true" && controller.BuiltInNode.NumExecutors > 0
 	}
 	job.RunsOnBuiltInNodeKnown = true
+}
+
+// isLabelExpression reports whether an <assignedNode> value is a label
+// expression rather than one bare label. The operators are the Jenkins set —
+// && || ! ( ) -> <-> plus quoting and whitespace; a bare label contains none
+// of them. '-' alone is not an operator: "built-in" is a label.
+func isLabelExpression(s string) bool {
+	return strings.ContainsAny(s, "&|!()<>\"' \t")
 }
 
 func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
@@ -499,19 +546,19 @@ func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
 	}
 }
 
-// triggersFrom collects trigger types and their schedules.
-//
-// A freestyle job carries them under <triggers>; a pipeline carries them under
-// <properties><...PipelineTriggersJobProperty><triggers>. Both decode into the
-// same element here because the struct tag matches on the element name at any
-// depth the decoder reaches it.
+// triggersFrom collects trigger types and their schedules from both places a
+// job keeps them: <triggers> under the root for a freestyle job, and under
+// <properties><…PipelineTriggersJobProperty> for a pipeline. A job has one or
+// the other, never both.
 func triggersFrom(cfg *jobConfig) []ci.Trigger {
 	var out []ci.Trigger
-	for _, t := range cfg.Triggers.Entries {
-		out = append(out, ci.Trigger{
-			Type: shortClassName(t.XMLName.Local),
-			Spec: strings.TrimSpace(t.Spec),
-		})
+	for _, entries := range [][]configTrigger{cfg.Triggers.Entries, cfg.PipelineTriggers.Entries} {
+		for _, t := range entries {
+			out = append(out, ci.Trigger{
+				Type: shortClassName(t.XMLName.Local),
+				Spec: strings.TrimSpace(t.Spec),
+			})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
 	return out

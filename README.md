@@ -111,8 +111,13 @@ Section 2 of the guide holds 28 controls across build environments, build
 workers, pipeline instructions and pipeline integrity. Not all of them are
 answerable from a controller's API — and several of the obvious candidates are
 not answerable by *anything*, because the API does not expose what they ask
-about. The table is complete rather than quietly partial: what cannot be
-automated ships as a manual control whose text says where the answer lives.
+about. The 15 below are what this release ships: every control that could be
+automated against a controller's API, plus the ones whose only honest form is
+a manual control whose text says where the answer lives. The remaining
+section-2 controls (2.2.2, 2.2.5, 2.2.7, 2.3.2, 2.3.3, 2.3.6, 2.3.7 and the
+2.4 pipeline-integrity block) are being dispositioned the same way — measured
+against a live controller first — and land as they are settled rather than
+being guessed at.
 
 | ID | Severity | Scope | Automated | Title |
 | --- | --- | --- | --- | --- |

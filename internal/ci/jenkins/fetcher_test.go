@@ -31,6 +31,8 @@ type stand struct {
 type standResponse struct {
 	body    string
 	headers map[string]string
+	// status overrides the 200 a handled path answers with. Zero means 200.
+	status int
 }
 
 func newStand(t *testing.T) *stand {
@@ -72,6 +74,9 @@ func (s *stand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	for k, v := range resp.headers {
 		w.Header().Set(k, v)
+	}
+	if resp.status != 0 {
+		w.WriteHeader(resp.status)
 	}
 	fmt.Fprint(w, resp.body)
 }
@@ -498,5 +503,143 @@ func TestFetcherKnowsTheLegacyMasterLabel(t *testing.T) {
 	snap := fetchFrom(t, s)
 	if !snap.Jobs[0].RunsOnBuiltInNode {
 		t.Error(`a job pinned to "master" runs on the controller`)
+	}
+}
+
+// A controller that never answers is not a scan result. Degrading it to "every
+// control is MANUAL" produces a report with a clean exit code that reads
+// exactly like a healthy least-privilege scan — so the fetch must fail
+// instead, and the CLI turns that into exit 2.
+func TestFetchFailsWhenTheControllerIsUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close() // nothing listens here any more
+
+	client, err := NewClient(Options{BaseURL: url, Username: "u", Token: "t", MaxRetries: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFetcher(client).Fetch(context.Background()); err == nil {
+		t.Fatal("a scan that read nothing must fail, not report every control MANUAL")
+	}
+}
+
+// A 401 on the authenticated instance read means the token was rejected. That
+// is operator error, not a permission posture, and carrying on would render
+// the mistyped-token report the unreachable-controller test above describes.
+func TestFetchFailsWhenTheCredentialsAreRejected(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{status: http.StatusUnauthorized, body: `Invalid password/token`}
+
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "wrong"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewFetcher(client).Fetch(context.Background())
+	if err == nil {
+		t.Fatal("a rejected token must fail the scan")
+	}
+	if !strings.Contains(err.Error(), "credentials") {
+		t.Errorf("the error should say the credentials were rejected: %v", err)
+	}
+}
+
+// A 200 that is not the Jenkins API — a login page, a proxy's splash screen —
+// is a wrong URL, not a readable controller.
+func TestFetchFailsWhenTheAnswerIsNotTheAPI(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `<html>welcome to the proxy</html>`}
+
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFetcher(client).Fetch(context.Background()); err == nil {
+		t.Fatal("a response that does not decode as the instance API must fail the scan")
+	}
+}
+
+// A 403 is different: the credential was accepted and this part of the API was
+// denied, which is the ordinary least-privilege case the rest of the scan is
+// built to degrade through. The scan carries on and says so.
+func TestFetchDegradesWhenTheInstanceAPIIsDenied(t *testing.T) {
+	s := hardened(t)
+	s.forbidden = append(s.forbidden, "/api/json")
+
+	snap := fetchFrom(t, s)
+	if snap.Controller.Available[AvailRoot] {
+		t.Error("a denied instance API must be recorded as unavailable")
+	}
+	if len(snap.Controller.Errors) == 0 {
+		t.Error("a denied instance API should leave an error in the snapshot")
+	}
+}
+
+// Pipelines keep their triggers under <properties>, not under the root the
+// way freestyle jobs do — and encoding/xml matches a tag against direct
+// children only, so the two locations need their own paths.
+func TestFetcherReadsPipelineTriggers(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"p","fullName":"p","url":"http://x/job/p/"}]}`}
+	s.handlers["/job/p/api/json"] = standResponse{body: `{"fullName":"p","disabled":false,"buildable":true}`}
+	s.handlers["/job/p/config.xml"] = standResponse{body: `<?xml version='1.1'?>
+<flow-definition>
+  <properties>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.SCMTrigger><spec>H/15 * * * *</spec></hudson.triggers.SCMTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition>
+</flow-definition>`}
+
+	snap := fetchFrom(t, s)
+	job := snap.Jobs[0]
+	if len(job.Triggers) != 1 || job.Triggers[0].Type != "SCMTrigger" || job.Triggers[0].Spec != "H/15 * * * *" {
+		t.Errorf("pipeline triggers = %+v, want the SCMTrigger under <properties>", job.Triggers)
+	}
+}
+
+// A label expression is not a label. The fetcher does not evaluate
+// expressions, and recording false for one would assert that a job which may
+// well run on the controller cannot — unknown is the honest answer.
+func TestFetcherLeavesLabelExpressionsUnknown(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/job/build/config.xml"] = standResponse{body: `<?xml version="1.0"?><project>
+		<canRoam>false</canRoam><assignedNode>built-in || linux</assignedNode></project>`}
+
+	snap := fetchFrom(t, s)
+	job := snap.Jobs[0]
+	if job.RunsOnBuiltInNodeKnown {
+		t.Errorf("an unevaluated label expression must leave runsOnBuiltInNode unknown, got %+v", job)
+	}
+}
+
+// An organization folder is a container: its children are the multibranch
+// projects. Treating it as a leaf job would drop all of them from the scan.
+func TestFetcherWalksIntoOrganizationFolders(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"jenkins.branch.OrganizationFolder","name":"gh-org","fullName":"gh-org","url":"http://x/job/gh-org/"}]}`}
+	s.handlers["/job/gh-org/api/json"] = standResponse{body: `{"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"app","fullName":"gh-org/app","url":"http://x/job/gh-org/job/app/"}]}`}
+	s.handlers["/job/gh-org/job/app/api/json"] = standResponse{body: `{"fullName":"gh-org/app","disabled":false,"buildable":true}`}
+	s.handlers["/job/gh-org/job/app/config.xml"] = standResponse{body: `<?xml version='1.1'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>
+		<sources class="jenkins.branch.MultiBranchProject$BranchSourceList"><data>
+		<jenkins.branch.BranchSource><source class="org.jenkinsci.plugins.github__branch__source.GitHubSCMSource"><remote>https://github.com/org/app</remote></source></jenkins.branch.BranchSource>
+		</data></sources></org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+
+	snap := fetchFrom(t, s)
+	if len(snap.Jobs) != 1 || snap.Jobs[0].FullName != "gh-org/app" {
+		t.Fatalf("jobs = %+v, want the multibranch project inside the organization folder", snap.Jobs)
+	}
+	if snap.Jobs[0].Kind != ci.KindMultibranch {
+		t.Errorf("kind = %q, want multibranch", snap.Jobs[0].Kind)
 	}
 }
