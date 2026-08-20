@@ -48,3 +48,11 @@ test_produces_a_verdict_for_an_empty_job if {
 	r := cis_2_1_2.result with input as testdata.input_for({})
 	r.status == "MANUAL"
 }
+
+# MANUAL, not NA: a definition class the fetcher has not been taught about may
+# well carry an inline script — nobody verified that it does not.
+test_manual_for_an_unrecognized_definition_class if {
+	r := cis_2_1_2.result with input as testdata.job_input({"definition": {"source": "unknown"}})
+	r.status == "MANUAL"
+	contains(r.details, "not recognize")
+}

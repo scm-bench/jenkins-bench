@@ -67,14 +67,6 @@ type Scan struct {
 	// AllowPlaintext permits an http:// URL, sending credentials in the
 	// clear.
 	AllowPlaintext bool `yaml:"allowPlaintext"`
-	// Progress is what to show while scanning: full, compact, or off.
-	Progress string `yaml:"progress"`
-	// Cache keeps each network scan's snapshot (0600, under the user config
-	// directory) so `scan --last` can re-render it — --details, another
-	// format, new thresholds — without contacting the instance again. The
-	// snapshot is a map of the instance's weak points, which is why this is
-	// a config key at all: false keeps it off disk.
-	Cache bool `yaml:"cache"`
 }
 
 // Duration is time.Duration that reads YAML the way people write durations:
@@ -122,8 +114,6 @@ func Default() Config {
 			Concurrency: 8,
 			Timeout:     Duration(30 * time.Second),
 			MaxDuration: 0,
-			Progress:    "compact",
-			Cache:       true,
 		},
 		Thresholds: Thresholds{
 			UpdateSiteMaxAgeDays: 30,
@@ -237,11 +227,6 @@ func (c Config) Validate() error {
 	case "high", "medium", "low", "none":
 	default:
 		return fmt.Errorf("scan.failOn %q: want high, medium, low or none", s.FailOn)
-	}
-	switch strings.ToLower(s.Progress) {
-	case "full", "compact", "off":
-	default:
-		return fmt.Errorf("scan.progress %q: want full, compact or off", s.Progress)
 	}
 	if s.Concurrency < 1 {
 		return fmt.Errorf("scan.concurrency must be at least 1, got %d", s.Concurrency)

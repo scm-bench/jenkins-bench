@@ -130,10 +130,13 @@ type jobConfig struct {
 	// AssignedNode and CanRoam decide where a freestyle job runs.
 	AssignedNode string `xml:"assignedNode"`
 	CanRoam      string `xml:"canRoam"`
-	// Triggers is the freestyle location. Pipelines carry them under
-	// <properties><...PipelineTriggersJobProperty><triggers>, which
-	// triggersFrom finds by walking instead.
+	// Triggers is the freestyle location: a <triggers> element directly under
+	// the document root. encoding/xml matches a tag against direct children
+	// only, so the pipeline location — <properties><…PipelineTriggersJobProperty>
+	// <triggers> — needs its own path below; one tag does not cover both.
 	Triggers configTriggers `xml:"triggers"`
+	// PipelineTriggers is where a pipeline job keeps the same element.
+	PipelineTriggers configTriggers `xml:"properties>org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>triggers"`
 	// Sources is a multibranch project's branch sources.
 	Sources configSources `xml:"sources"`
 }
@@ -185,7 +188,18 @@ const (
 // Jenkins item classes.
 const (
 	classFolder      = "com.cloudbees.hudson.plugins.folder.Folder"
+	classOrgFolder   = "jenkins.branch.OrganizationFolder"
 	classMultibranch = "org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject"
 	classWorkflowJob = "org.jenkinsci.plugins.workflow.job.WorkflowJob"
 	classFreestyle   = "hudson.model.FreeStyleProject"
 )
+
+// isContainer reports whether an item is a container to walk into rather than
+// a job to record. An organization folder is a container too: treating it as a
+// leaf would drop every multibranch project inside it from the scan, silently.
+// (A multibranch project is deliberately NOT a container — its children are
+// generated per-branch copies of one job, and descending would repeat every
+// finding per branch.)
+func isContainer(class string) bool {
+	return class == classFolder || class == classOrgFolder
+}

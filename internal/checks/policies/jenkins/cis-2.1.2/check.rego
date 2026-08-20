@@ -15,6 +15,11 @@ result := {
 } if {
 	not lib.available("config")
 } else := {
+	"status": "MANUAL",
+	"details": "The job's definition is of a class this scan does not recognize, so whether it carries an inline script — and whether that script is sandboxed — is unknown.",
+} if {
+	lib.definition_source == "unknown"
+} else := {
 	"status": "NA",
 	"details": "The job has no inline pipeline script, so the sandbox setting does not apply.",
 } if {

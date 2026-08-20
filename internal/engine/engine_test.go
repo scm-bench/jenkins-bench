@@ -147,8 +147,6 @@ func TestJobScopeWouldBeEvaluatedPerJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No job-scope control exists yet; assert the wiring by checking that the
-	// engine knows both scopes and that the snapshot's jobs reach it intact.
 	for _, c := range eng.Checks() {
 		if c.Scope != checks.ScopeController && c.Scope != checks.ScopeJob {
 			t.Errorf("%s has scope %q, which the engine cannot dispatch", c.ID, c.Scope)
@@ -160,6 +158,25 @@ func TestJobScopeWouldBeEvaluatedPerJob(t *testing.T) {
 	}
 	if rep.Metadata.Platform != snap.Metadata.Platform {
 		t.Error("report metadata should carry the snapshot's")
+	}
+	// Per-job dispatch, concretely: every job-scope control must produce one
+	// finding per job in the snapshot, named after that job.
+	perJob := map[string]map[string]bool{}
+	for _, f := range rep.Findings {
+		if f.ResourceType == ResourceJob {
+			if perJob[f.CheckID] == nil {
+				perJob[f.CheckID] = map[string]bool{}
+			}
+			perJob[f.CheckID][f.Resource] = true
+		}
+	}
+	if len(perJob) == 0 {
+		t.Fatal("the bundle ships job-scope controls; none produced a finding")
+	}
+	for id, resources := range perJob {
+		if len(resources) != len(snap.Jobs) {
+			t.Errorf("%s produced findings for %d jobs, want %d", id, len(resources), len(snap.Jobs))
+		}
 	}
 }
 

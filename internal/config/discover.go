@@ -17,7 +17,7 @@ const userConfigFile = "config.yaml"
 // Discover finds the config file an unadorned `jenkins-bench scan` should use:
 // jenkins-bench.yaml (or .jenkins-bench.yaml) in the working directory first — the
 // project's file, the one a repository commits for CI — then config.yaml
-// under the user config directory (or BITBUCKET_BENCH_CONFIG_DIR), the person's
+// under the user config directory (or JENKINS_BENCH_CONFIG_DIR), the person's
 // own defaults. "" means none found, which is not an error: defaults are the
 // normal state before anyone has run init.
 //
@@ -43,10 +43,10 @@ func Discover() (string, error) {
 }
 
 // userConfigDir is where per-user jenkins-bench files live, shared with the
-// saved instance: BITBUCKET_BENCH_CONFIG_DIR when set, else the platform's user
+// saved instance: JENKINS_BENCH_CONFIG_DIR when set, else the platform's user
 // config directory.
 func userConfigDir() (string, error) {
-	if dir := os.Getenv("BITBUCKET_BENCH_CONFIG_DIR"); dir != "" {
+	if dir := os.Getenv("JENKINS_BENCH_CONFIG_DIR"); dir != "" {
 		return dir, nil
 	}
 	dir, err := os.UserConfigDir()

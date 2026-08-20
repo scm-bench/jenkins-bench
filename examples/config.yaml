@@ -23,7 +23,8 @@ scan:
   # token that can read very little produces a high score from a small sample —
   # and a token without Job/ExtendedRead cannot answer a single job-scope
   # control. A ceiling here is what turns that into a failure rather than a
-  # clean report.
+  # clean report. Only automated controls count against it: the bundle also
+  # ships controls that are manual by design, and no token makes those go away.
   failOn: high
   failUnder: 0
   maxManual: -1

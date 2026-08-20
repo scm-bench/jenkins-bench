@@ -15,13 +15,21 @@ data_timestamp := object.get(lib.resource, ["updateSite", "dataTimestamp"], "")
 generated_at := object.get(input, ["metadata", "generatedAt"], "")
 
 # data_age_days is how old the update-centre cache was at capture time.
-# Undefined when either timestamp is missing or unparseable, which the MANUAL
-# branches catch via known/available first.
+# Undefined when either timestamp is missing or unparseable.
 data_age_days := days if {
 	captured := time.parse_rfc3339_ns(generated_at)
 	fetched := time.parse_rfc3339_ns(data_timestamp)
 	days := (captured - fetched) / (((((1000 * 1000) * 1000) * 60) * 60) * 24)
 }
+
+# The staleness gate must itself be decidable before it can be applied. A
+# snapshot with no capture time — hand-edited, produced by another tool, or
+# carrying Go's zero time — leaves data_age_days undefined or absurd, and
+# without this guard the undefined comparison would fall straight through the
+# stale branch into a PASS built on data nobody dated. A small negative age is
+# only clock skew between the controller and the machine that scanned it; more
+# than a day of it means the two timestamps cannot be trusted together.
+age_known if data_age_days >= -1
 
 outdated := [p.shortName |
 	some p in lib.list("plugins")
@@ -43,6 +51,11 @@ result := {
 	"details": "The update centre reports no data timestamp, so hasUpdate cannot be trusted: a controller that has never fetched update data reports every plugin as current.",
 } if {
 	not lib.known(["updateSite", "dataTimestamp"])
+} else := {
+	"status": "MANUAL",
+	"details": "The snapshot does not record a plausible capture time, so the update-centre data's age cannot be computed and hasUpdate cannot be trusted.",
+} if {
+	not age_known
 } else := {
 	"status": "MANUAL",
 	"details": sprintf("The update-centre data is %d day(s) old (the limit is %d), so hasUpdate is a comparison against a stale catalogue. Let the controller reach its update site, or lower thresholds.updateSiteMaxAgeDays if this is expected.", [floor(data_age_days), max_age_days]),

@@ -113,6 +113,11 @@ func NewClient(opts Options) (*Client, error) {
 // BaseURL returns the controller root.
 func (c *Client) BaseURL() string { return c.baseURL.String() }
 
+// HasCredentials reports whether requests carry an Authorization header. The
+// fetcher needs the distinction once: a 401 with credentials means they were
+// rejected, while a 401 without them is just a controller requiring login.
+func (c *Client) HasCredentials() bool { return c.username != "" }
+
 // APIError is a non-2xx response.
 type APIError struct {
 	StatusCode int
@@ -201,8 +206,9 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 	}
 
 	var lastErr error
+	waited := false // a Retry-After already paced this retry
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !waited {
 			delay := backoff(attempt)
 			c.logf("retrying %s in %s (attempt %d/%d)", path, delay, attempt, c.maxRetries)
 			select {
@@ -211,6 +217,7 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 			case <-time.After(delay):
 			}
 		}
+		waited = false
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 		if err != nil {
@@ -252,6 +259,9 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 					return nil, nil, ctx.Err()
 				case <-time.After(wait):
 				}
+				// The server named its own pace; adding the loop head's
+				// exponential backoff on top would sleep twice per retry.
+				waited = true
 			}
 			continue
 		default:

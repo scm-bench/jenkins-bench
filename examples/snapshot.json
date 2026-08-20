@@ -67,7 +67,7 @@
       "agents": true,
       "credentials": true,
       "plugins": false,
-      "updateSite": false
+      "updateSite": true
     },
     "errors": [
       "the plugin list could not be read (GET /pluginManager/api/json?depth=1: HTTP 403 Forbidden); Overall/Administer is required"

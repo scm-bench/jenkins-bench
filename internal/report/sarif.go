@@ -207,10 +207,10 @@ func buildRule(f engine.Finding) sarifRule {
 	//
 	// GitHub takes an alert's displayed severity from the rule's
 	// security-severity, not from the result's level — so a control that can
-	// only ever report MANUAL, like CIS-1.3.5 for multi-factor authentication,
-	// arrived in the Security panel as an 8.0 High alert saying a setting was
-	// broken, while `--fail-on high` locally did not fail on it at all. Two
-	// severities for the same finding, and the louder one was wrong.
+	// only ever report MANUAL, like CIS-2.2.1 for single-use build workers,
+	// would arrive in the Security panel as a High alert saying a setting was
+	// broken, while `scan.failOn` locally did not fail on it at all. Two
+	// severities for the same finding, and the louder one wrong.
 	level, severity := "note", securitySeverity(checks.SeverityLow)
 	if f.Status == engine.StatusFail {
 		level, severity = sarifLevel(f.Severity), securitySeverity(f.Severity)
@@ -225,7 +225,7 @@ func buildRule(f engine.Finding) sarifRule {
 		HelpURI:              helpURI,
 		DefaultConfiguration: sarifRuleConfig{Level: level},
 		Properties: sarifRuleProperty{
-			Tags:             []string{"security", "supply-chain", "cis", "source-code"},
+			Tags:             []string{"security", "supply-chain", "cis", "build-pipelines"},
 			SecuritySeverity: severity,
 			Severity:         strings.ToUpper(f.Severity),
 			CISID:            f.CISID,

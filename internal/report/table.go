@@ -65,7 +65,7 @@ func writeTable(w io.Writer, rep *engine.Report, opts Options) error {
 
 		writeHeader(w, rep, p, width)
 		writeNotice(w, p, width, opts.Notice)
-		writeWarnings(w, rep, p, width)
+		writeWarnings(w, rep, p, width, !opts.NoRemediations)
 		writeResourceSections(w, filtered, p, width, opts)
 		if !opts.NoRemediations {
 			writeRemediations(w, filtered, p, width)
@@ -79,7 +79,7 @@ func writeTable(w io.Writer, rep *engine.Report, opts Options) error {
 	writeFindingLines(w, rep, p, width, opts)
 	// After the findings rather than before them: the unread sentence points
 	// here, and the cause should sit next to the symptom.
-	writeWarnings(w, rep, p, width)
+	writeWarnings(w, rep, p, width, !opts.NoRemediations)
 	if !opts.NoRemediations {
 		writeRulesIndex(w, rep, p, width)
 	}
@@ -377,7 +377,7 @@ func tallyResources(findings []engine.Finding) []resourceTally {
 	return out
 }
 
-func writeWarnings(w io.Writer, rep *engine.Report, p painter, width int) {
+func writeWarnings(w io.Writer, rep *engine.Report, p painter, width int, withFix bool) {
 	if len(rep.Metadata.Warnings) > 0 {
 		blank(w)
 		line(w, "%s", p.paint(ansiBold+ansiYellow, "Scan warnings"))
@@ -389,8 +389,13 @@ func writeWarnings(w io.Writer, rep *engine.Report, p painter, width int) {
 		// sees.
 		unreadable := false
 		for _, warning := range rep.Metadata.Warnings {
-			// Both phrasings the fetcher uses for an access refusal.
-			if strings.Contains(warning, "not readable") || strings.Contains(warning, "could not be expanded") {
+			// The phrasings the fetcher uses for an access refusal — see
+			// fetcher.go's warn calls; a new phrasing there needs a match
+			// here, or the fix line below silently stops printing.
+			if strings.Contains(warning, "could not be read") ||
+				strings.Contains(warning, "cannot read") ||
+				strings.Contains(warning, "not visible") ||
+				strings.Contains(warning, "not readable") {
 				unreadable = true
 			}
 			depth := 0
@@ -408,7 +413,7 @@ func writeWarnings(w io.Writer, rep *engine.Report, p painter, width int) {
 		// finding about the token and deserves one too. Without this line the
 		// report's biggest caveat — how much went unevaluated — is the one
 		// problem it never says how to solve.
-		if unreadable {
+		if unreadable && withFix {
 			blank(w)
 			prose(w, width, "  fix: ", 7,
 				"rerun with a token that has administrator read access, so the scan can evaluate what it could not see.")
