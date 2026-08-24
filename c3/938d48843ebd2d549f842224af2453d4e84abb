@@ -1,0 +1,41 @@
+internal/checks/policies/jenkins/cis-2.1.2/check_test.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 59-70
+internal/checks/policies/jenkins/cis-2.1.1/check_test.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 20-28
+CONTRIBUTING.md
+  s_cfb45fabb10d03::t_91e79ef34a2803 95-101
+internal/checks/policies/jenkins/cis-2.3.5/check.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 15-19
+internal/checks/policies/jenkins/cis-2.3.4/check.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 1-5,10-11,13-17
+internal/checks/policies/lib/common.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 76-83
+internal/checks/policies/jenkins/cis-2.3.4/check_test.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 20-25
+internal/checks/policies/jenkins/cis-2.3.5/check_test.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 36-41
+internal/checks/policies/jenkins/cis-2.3.1/check.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 11-15
+internal/checks/policies/jenkins/cis-2.1.2/check.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 13-17
+internal/checks/policies/jenkins/cis-2.3.1/check_test.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 79-86
+internal/checks/policies/jenkins/cis-2.1.1/check.rego
+  s_cfb45fabb10d03::t_91e79ef34a2803 1-5,10-11,13-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "c3938d48843ebd2d549f842224af2453d4e84abb",
+  "prompts": {},
+  "sessions": {
+    "s_cfb45fabb10d03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b97f2a7-f228-4d75-902f-db1a70e9980d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
