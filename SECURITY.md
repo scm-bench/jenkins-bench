@@ -35,8 +35,8 @@ supported path.
 
 ## What matters most in this project
 
-jenkins-bench reads a customer's source control instance with a credential they
-supplied and writes a file describing exactly where that instance is weak.
+jenkins-bench reads a customer's Jenkins controller with a credential they
+supplied and writes a file describing exactly where that controller is weak.
 Reports of the following are especially welcome:
 
 - **A credential leaking** into a snapshot, a report, a log line, or a crash.
