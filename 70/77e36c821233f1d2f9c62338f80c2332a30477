@@ -1,0 +1,26 @@
+SECURITY.md
+  s_cfb45fabb10d03::t_91e79ef34a2803 38-39
+internal/cli/scan_test.go
+  s_cfb45fabb10d03::t_91e79ef34a2803 15-16,377-435
+  s_cfb45fabb10d03::t_ab9d5a08c0fd29 436
+internal/cli/scan.go
+  s_cfb45fabb10d03::t_91e79ef34a2803 407-412,415,424,431-432
+.goreleaser.yaml
+  s_cfb45fabb10d03::t_91e79ef34a2803 112-117,143,161,203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "7077e36c821233f1d2f9c62338f80c2332a30477",
+  "prompts": {},
+  "sessions": {
+    "s_cfb45fabb10d03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b97f2a7-f228-4d75-902f-db1a70e9980d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
