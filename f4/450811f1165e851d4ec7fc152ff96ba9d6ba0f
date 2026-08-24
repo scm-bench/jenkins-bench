@@ -1,0 +1,21 @@
+.goreleaser.yaml
+  s_cfb45fabb10d03::t_451433ae294848 221-223,227-229,232-233,236-241
+CONTRIBUTING.md
+  s_cfb45fabb10d03::t_8b22bf4cc901ce 159,170-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "f4450811f1165e851d4ec7fc152ff96ba9d6ba0f",
+  "prompts": {},
+  "sessions": {
+    "s_cfb45fabb10d03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b97f2a7-f228-4d75-902f-db1a70e9980d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "shenxianpeng <xianpeng.shen@gmail.com>"
+    }
+  }
+}
