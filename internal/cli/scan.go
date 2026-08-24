@@ -404,9 +404,12 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 // failureSummary counts controls, not findings: one misconfiguration across
 // 200 jobs is 200 findings, and "200 controls failed" cannot be true of a
 // bundle that holds 15.
+//
+// Resources too: counting findings made three controls failing on one job read
+// as "across 3 resources", sending the reader after two jobs that do not exist.
 func failureSummary(rep *engine.Report, threshold string) string {
 	controls := map[string]bool{}
-	resources := 0
+	resources := map[string]bool{}
 	for _, f := range rep.Findings {
 		if f.Status != engine.StatusFail {
 			continue
@@ -415,15 +418,15 @@ func failureSummary(rep *engine.Report, threshold string) string {
 			continue
 		}
 		controls[f.CheckID] = true
-		resources++
+		resources[f.Resource] = true
 	}
 	if len(controls) == 0 {
 		return "the failure threshold was breached"
 	}
 	summary := fmt.Sprintf("%s failed at or above %s",
 		console.Pluralize(len(controls), "control"), strings.ToUpper(threshold))
-	if resources > len(controls) {
-		summary += fmt.Sprintf(", across %s", console.Pluralize(resources, "resource"))
+	if len(resources) > 1 {
+		summary += fmt.Sprintf(", across %s", console.Pluralize(len(resources), "resource"))
 	}
 	return summary
 }

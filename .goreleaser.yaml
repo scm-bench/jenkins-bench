@@ -109,14 +109,12 @@ snapshot:
 # Release notes are written by hand on the release page. goreleaser builds,
 # signs and uploads; it does not narrate.
 #
-# Grouping commits here contradicted two things the project had already
-# committed to in writing. CONTRIBUTING tells contributors that release notes
-# are grouped by label and that an unlabelled pull request lands under "Other
-# changes" — which was false while this file rendered the body from commit
-# subjects. It also tells them commit messages are plain imperative sentences
-# rather than Conventional Commits, while the grouping regexps depended on
-# exactly those prefixes. Handing the job to .github/release.yml makes both
-# sentences true again.
+# Grouping commits here contradicted what the project had already committed to
+# in writing: CONTRIBUTING tells contributors that release notes are grouped by
+# label and that an unlabelled pull request lands under "Other changes", which
+# was false while this file rendered the body from commit subjects. Handing the
+# job to .github/release.yml makes that sentence true again, and it groups by
+# the thing contributors are actually asked to set.
 #
 # The cost is worth stating: GitHub's generator lists *merged pull requests*,
 # and everything currently lands on main by direct push, so it has nothing to
@@ -142,7 +140,7 @@ dockers:
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=Audit source control platforms against the CIS Software Supply Chain Security benchmark"
+      - "--label=org.opencontainers.image.description=Audit a Jenkins controller against the CIS Software Supply Chain Security benchmark"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
@@ -160,7 +158,7 @@ dockers:
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=Audit source control platforms against the CIS Software Supply Chain Security benchmark"
+      - "--label=org.opencontainers.image.description=Audit a Jenkins controller against the CIS Software Supply Chain Security benchmark"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
@@ -202,7 +200,7 @@ release:
   # deliberately absent: a prerelease never becomes it (skip_push: auto below),
   # so naming it here would hand someone the wrong image.
   header: |
-    `jenkins-bench` audits a source control platform against the Source Code section
+    `jenkins-bench` audits a Jenkins controller against the Build Pipelines section
     of the CIS Software Supply Chain Security Guide.
 
     ```bash

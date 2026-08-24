@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/scm-bench/jenkins-bench/internal/engine"
 )
 
 // controller is a stand-in that answers enough for a scan to complete, with the
@@ -370,5 +372,63 @@ func TestRefusalMessageNamesAWorkingEscapeHatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--set scan.allowPlaintext=true") {
 		t.Errorf("the refusal should name the escape hatch that exists: %v", err)
+	}
+}
+
+// Both halves of the summary must count the same population: findings rather
+// than distinct resources turned one failing job into "across 3 resources".
+func TestFailureSummaryCountsDistinctResources(t *testing.T) {
+	fail := func(check, resource, severity string) engine.Finding {
+		return engine.Finding{
+			CheckID:  check,
+			Severity: severity,
+			Status:   engine.StatusFail,
+			Resource: resource,
+		}
+	}
+
+	cases := []struct {
+		name string
+		rep  engine.Report
+		want string
+	}{
+		{
+			name: "one control on one resource names no resource count",
+			rep:  engine.Report{Findings: []engine.Finding{fail("CIS-2.2.3", "controller", "HIGH")}},
+			want: "1 control failed at or above HIGH",
+		},
+		{
+			name: "several controls on the same resource stay at one resource",
+			rep: engine.Report{Findings: []engine.Finding{
+				fail("CIS-2.1.6", "controller", "HIGH"),
+				fail("CIS-2.2.3", "controller", "HIGH"),
+			}},
+			want: "2 controls failed at or above HIGH",
+		},
+		{
+			name: "one control across several jobs counts the jobs once each",
+			rep: engine.Report{Findings: []engine.Finding{
+				fail("CIS-2.3.1", "legacy-build", "HIGH"),
+				fail("CIS-2.3.1", "platform/inline-deploy", "HIGH"),
+				fail("CIS-2.3.5", "legacy-build", "HIGH"),
+			}},
+			want: "2 controls failed at or above HIGH, across 2 resources",
+		},
+		{
+			name: "findings below the threshold are not counted",
+			rep: engine.Report{Findings: []engine.Finding{
+				fail("CIS-2.2.3", "controller", "HIGH"),
+				fail("CIS-2.3.5", "legacy-build", "MEDIUM"),
+			}},
+			want: "1 control failed at or above HIGH",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := failureSummary(&tc.rep, "high"); got != tc.want {
+				t.Errorf("failureSummary() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
