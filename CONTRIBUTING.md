@@ -156,7 +156,7 @@ tag to create. The workflow does the rest.
 git tag -a v0.1.0 -m "jenkins-bench v0.1.0" && git push origin v0.1.0
 ```
 
-Three things that have each gone wrong once in this family:
+Four things that have each gone wrong once in this family:
 
 - **All three components, and the `v`** — `v0.1.0`, never `v0.1`. Go accepts
   `v0.1` as a semver string but not a canonical one, so the module system
@@ -167,6 +167,11 @@ Three things that have each gone wrong once in this family:
 - **Use `-rc.N` while something is unverified.** Go's `@latest` resolves to the
   newest *release* version, so a prerelease reaches only those who ask for it by
   name, and you can iterate without spending `v0.1.0`.
+- **The GHCR package is created private.** The first release publishes
+  `ghcr.io/scm-bench/<bench>` as a private package, so the `docker run` line in
+  the README fails with `unauthorized` for everyone. Flip it once under the
+  organization's Packages → the package → Package settings → Change visibility.
+  Nothing in the workflow can do it.
 
 Signing needs nothing from you — cosign works keylessly from the workflow's OIDC
 token. Before publishing, check `checksums.txt.bundle` and the SBOMs are

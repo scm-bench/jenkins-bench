@@ -218,18 +218,24 @@ release:
 
     # 2. the checksum file came from this repository's release workflow
     cosign verify-blob checksums.txt --bundle checksums.txt.bundle \
-      --certificate-identity-regexp '^https://github\.com/scm-bench/jenkins-bench/\.github/workflows/release\.yml@' \
-      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      --certificate-identity-regexp '^https://github\.com/scm-bench/\.github/\.github/workflows/go-bench-release\.yml@' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      --certificate-github-workflow-repository scm-bench/jenkins-bench
 
     # 3. the container image, same signing identity
     cosign verify ghcr.io/scm-bench/jenkins-bench:{{ .Version }} \
-      --certificate-identity-regexp '^https://github\.com/scm-bench/jenkins-bench/\.github/workflows/release\.yml@' \
-      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      --certificate-identity-regexp '^https://github\.com/scm-bench/\.github/\.github/workflows/go-bench-release\.yml@' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      --certificate-github-workflow-repository scm-bench/jenkins-bench
 
     # 4. what commit and workflow built an archive
-    gh attestation verify jenkins-bench_{{ .Version }}_linux_amd64.tar.gz --repo scm-bench/jenkins-bench
+    gh attestation verify jenkins-bench_{{ .Version }}_linux_amd64.tar.gz \
+      --repo scm-bench/jenkins-bench --signer-repo scm-bench/.github
     ```
 
-    The two `--certificate-*` flags are the point of the cosign commands: without
-    them cosign confirms only that *somebody* signed the file. Each archive also
-    ships an SPDX SBOM (`*.sbom.json`), covered by the same checksum file.
+    The signing identity is scm-bench/.github's shared release workflow, not this
+    repository's — the job runs inside the reusable workflow, so that is what the
+    OIDC token names. `--certificate-github-workflow-repository` and `--signer-repo`
+    are what tie the signature back to this repository; without them cosign
+    confirms only that *somebody* signed the file. Each archive also ships an SPDX
+    SBOM (`*.sbom.json`), covered by the same checksum file.
