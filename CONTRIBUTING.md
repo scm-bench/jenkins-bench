@@ -92,6 +92,13 @@ result := {"status": "MANUAL", "details": "..."} if {
 The `MANUAL` branch comes first on purpose: deciding what the data says is only
 sound once you have established that you have the data.
 
+One branch outranks it. A job-scope control opens with `lib.job_disabled` →
+`NA`, ahead of the availability check, because whether a job is disabled comes
+from the job API that `Job/Read` already reads — a job that cannot run is not
+made more decidable by reading its configuration. Say in the `details` that
+re-enabling the job brings the control back, so an `NA` is not mistaken for a
+clean bill of health.
+
 **Read every list through `lib.list`**, never `object.get`. A nil Go slice
 marshals to JSON `null`, and `object.get` only substitutes its default for an
 *absent* key — a key present with a null value comes back null, and passing that

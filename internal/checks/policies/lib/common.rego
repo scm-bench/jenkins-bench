@@ -73,6 +73,10 @@ plugin_installed(short_name) if {
 # job_disabled is true for a job that cannot run. Controls about how a job
 # builds report NA for one, the way a branch protection control reports NA for
 # a repository with no commits: there is nothing to get wrong.
+#
+# It goes first in a control's chain, ahead of the availability checks: whether
+# a job is disabled comes from the job API that Job/Read already reads.
+# scan.skipDisabledJobs drops these jobs from the report instead.
 job_disabled if {
 	object.get(resource, "disabled", false) == true
 }
