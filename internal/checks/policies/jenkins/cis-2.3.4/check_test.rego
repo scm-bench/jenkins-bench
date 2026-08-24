@@ -17,3 +17,9 @@ test_manual_even_for_an_empty_resource if {
 	r := cis_2_3_4.result with input as testdata.input_for({})
 	r.status == "MANUAL"
 }
+
+test_na_for_a_disabled_job if {
+	r := cis_2_3_4.result with input as testdata.job_input({"disabled": true})
+	r.status == "NA"
+	contains(r.details, "Re-enabling")
+}

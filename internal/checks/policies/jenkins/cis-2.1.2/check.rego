@@ -10,6 +10,11 @@ import data.scmbench.lib
 sandboxed := object.get(lib.resource, ["definition", "sandbox"], false)
 
 result := {
+	"status": "NA",
+	"details": "The job is disabled and cannot run, so its script never reaches an executor, sandboxed or not. Re-enabling it brings this control back.",
+} if {
+	lib.job_disabled
+} else := {
 	"status": "MANUAL",
 	"details": "The job's configuration could not be read (it requires Job/ExtendedRead), so whether its script is sandboxed is unknown.",
 } if {

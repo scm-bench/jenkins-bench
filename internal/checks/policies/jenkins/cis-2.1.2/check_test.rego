@@ -56,3 +56,15 @@ test_manual_for_an_unrecognized_definition_class if {
 	r.status == "MANUAL"
 	contains(r.details, "not recognize")
 }
+
+# NA ahead of everything else: a disabled job cannot run a script, sandboxed or
+# not, and that stays true whether or not its configuration was readable.
+test_na_for_a_disabled_job if {
+	r := cis_2_1_2.result with input as testdata.job_input({"disabled": true, "definition": {"source": "inline", "sandbox": false, "sandboxKnown": true}})
+	r.status == "NA"
+}
+
+test_na_for_a_disabled_job_whose_configuration_was_unreadable if {
+	r := cis_2_1_2.result with input as testdata.job_input({"disabled": true, "available": testdata.without(testdata.job_available, "config")})
+	r.status == "NA"
+}

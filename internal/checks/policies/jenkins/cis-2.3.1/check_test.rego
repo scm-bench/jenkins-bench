@@ -76,3 +76,11 @@ test_manual_message_falls_back_when_the_class_is_absent if {
 	r.status == "MANUAL"
 	contains(r.details, "unknown")
 }
+
+# The case that made this control worth changing: a disabled freestyle job used
+# to report HIGH FAIL for build steps that never execute.
+test_na_for_a_disabled_job if {
+	r := cis_2_3_1.result with input as testdata.job_input({"disabled": true, "class": "hudson.model.FreeStyleProject", "kind": "freestyle", "definition": {"source": "ui"}})
+	r.status == "NA"
+	contains(r.details, "Re-enabling")
+}

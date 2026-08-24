@@ -33,3 +33,9 @@ test_produces_a_verdict_for_an_empty_job if {
 	r := cis_2_3_5.result with input as testdata.input_for({})
 	r.status == "MANUAL"
 }
+
+# A token on a disabled job starts nothing, so the FAIL branch must not win.
+test_na_for_a_disabled_job_even_with_a_token if {
+	r := cis_2_3_5.result with input as testdata.job_input({"disabled": true, "remoteTriggerToken": true})
+	r.status == "NA"
+}

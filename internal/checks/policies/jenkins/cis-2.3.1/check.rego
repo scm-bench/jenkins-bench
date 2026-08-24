@@ -8,6 +8,11 @@ import rego.v1
 import data.scmbench.lib
 
 result := {
+	"status": "NA",
+	"details": "The job is disabled and cannot run, so its build steps never execute. Re-enabling it brings this control back.",
+} if {
+	lib.job_disabled
+} else := {
 	"status": "MANUAL",
 	"details": "The job's configuration could not be read (it requires Job/ExtendedRead), so how its build steps are defined is unknown.",
 } if {

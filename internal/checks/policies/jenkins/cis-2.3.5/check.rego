@@ -12,6 +12,11 @@ import data.scmbench.lib
 has_token := object.get(lib.resource, "remoteTriggerToken", false)
 
 result := {
+	"status": "NA",
+	"details": "The job is disabled and cannot run, so a remote trigger token cannot start a build. Re-enabling it brings this control back.",
+} if {
+	lib.job_disabled
+} else := {
 	"status": "MANUAL",
 	"details": "The job's configuration could not be read (it requires Job/ExtendedRead), so whether a remote trigger token exists is unknown.",
 } if {

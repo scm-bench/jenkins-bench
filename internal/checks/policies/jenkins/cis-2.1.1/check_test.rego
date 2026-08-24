@@ -17,3 +17,12 @@ test_manual_even_for_an_empty_resource if {
 	r := cis_2_1_1.result with input as testdata.input_for({})
 	r.status == "MANUAL"
 }
+
+# A disabled job has no run to have an opinion about, so the always-MANUAL
+# control steps aside rather than filling the report with review requests for
+# jobs nobody can trigger.
+test_na_for_a_disabled_job if {
+	r := cis_2_1_1.result with input as testdata.job_input({"disabled": true})
+	r.status == "NA"
+	contains(r.details, "Re-enabling")
+}
