@@ -1,0 +1,42 @@
+internal/ci/jenkins/scripts.go
+  s_48d8fa1c49bfb6::t_25e89b1b01aac6 12-108
+  s_66212c309e21f0::t_862bb0396daa19 1-11
+internal/checks/policies/jenkins/cis-2.1.2/check.rego
+  s_48d8fa1c49bfb6::t_08058e72c487e3 1-11,20-29,40-53,63,69,71-77
+internal/checks/policies/jenkins/cis-2.1.2/check_test.rego
+  s_48d8fa1c49bfb6::t_73ff67f3085cec 86-127
+internal/checks/policies/jenkins/cis-2.1.2/metadata.json
+  s_48d8fa1c49bfb6::t_8e8e7828e2479f 12-14
+internal/ci/jenkins/fetcher.go
+  s_48d8fa1c49bfb6::t_417ee90a84ff4e 568-578,618-627,630,642-645,648
+internal/ci/jenkins/scripts_test.go
+  s_48d8fa1c49bfb6::t_68c69f41011901 1-64
+internal/ci/snapshot.go
+  s_48d8fa1c49bfb6::t_3d2a4fc1713757 184-189,263-272
+internal/cli/scan_test.go
+  s_48d8fa1c49bfb6::t_e3f9d0e57145aa 866-896
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6045e45f658384ee47803cb5b0648d2dd27dc746",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    },
+    "s_66212c309e21f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8763d161-5362-48a1-ae9b-11f7bcd83469",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
