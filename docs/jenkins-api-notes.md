@@ -46,6 +46,11 @@ Read the bolded cells as the shape of this bench's `available` map. Everything a
 is therefore always knowable, even when nothing else is — useful for
 `metadata`, and worth stating plainly in a report.
 
+Every response carries it, a `403` included (re-checked on 2.580.1), so the
+fetcher takes it from the instance API's own answer and never requests
+`/login` — the page an SSO realm redirects, and so the request likeliest to
+meet an https-to-http bounce with the token attached.
+
 ---
 
 ## The five findings that change the design
@@ -407,3 +412,80 @@ Mint one at *People → \<user\> → Security → API Token*, or over HTTP with 
 `/me/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken` —
 which needs a crumb, being a `POST`, and is not something the bench itself ever
 does.
+
+---
+
+## Re-measured against 2.580.1 (October 2026)
+
+The audit of v0.1 found the fetcher misreading a real controller in several
+places, and [`hack/e2e`](../hack/e2e) now boots one with each shape in it. What
+that controller answered, with an account per permission:
+
+| Endpoint | admin | reader | extended | sysread | nojob | anon |
+| --- | --- | --- | --- | --- | --- | --- |
+| `/api/json?tree=useSecurity` | 200 | 200 | 200 | 200 | 200 | 403 |
+| `/api/json?tree=jobs[name]` | 200 | 200 | 200 | 200 | **200, `[]`** | 403 |
+| `/computer/api/json` | 200 | 200 | 200 | 200 | 200 | 403 |
+| `/pluginManager/api/json` | 200 | 403 | 403 | **200** | 403 | 403 |
+| `/updateCenter/site/default/api/json` | 200 | 403 | 403 | **200** | 403 | 403 |
+| `/credentials/api/json?depth=3` | 200 | 200, empty | 200, empty | **200, empty** | 200, empty | 403 |
+| `/job/<path>/api/json` | 200 | 200 | 200 | 200 | **404** | 403 |
+| `/job/<path>/config.xml` | 200 | 403 | **200** | 403 | 404 | 403 |
+
+`extended` is reader plus `Job/ExtendedRead`; `sysread` is reader plus
+`Overall/SystemRead`; `nojob` holds `Overall/Read` alone. Both opt-in
+permissions need their system properties
+(`hudson.security.ExtendedReadPermission`,
+`jenkins.security.SystemReadPermission`).
+
+Three rows changed the design:
+
+- **A token without `Job/Read` gets an empty job list, not a refusal.** Nothing
+  in the answer distinguishes it from a controller with no jobs, so a scan that
+  evaluated none exits 2.
+- **The plugin manager needs `Overall/SystemRead`, not `Overall/Administer`.**
+  v0.1 took a readable plugin list as proof that an empty credential list was
+  complete. The SystemRead account reads the plugin list and is shown
+  `{"stores":{}}` by a controller holding two credentials. Credential
+  availability is now earned from the store list alone.
+- **`/job/<path>/api/json` is no longer needed.** A folder listing asked for
+  `jobs[_class,name,fullName,url,disabled,buildable]` carries the two fields it
+  was fetched for (a multibranch project exports `buildable` only), and the
+  nested range `jobs[_class]{0,1}` tells a container from a job by the presence
+  of its `jobs` array.
+
+### The root object is also the built-in node
+
+`/api/json?tree=mode,assignedLabels[name]` answers the built-in node's mode
+(`NORMAL` or `EXCLUSIVE`) and its labels with `Overall/Read` alone, so where a
+job can run no longer depends on the node list being readable.
+
+### Shapes the fetcher now reads, as the plugins write them
+
+- **Generic Webhook Trigger** (`generic-webhook-trigger` 2.4.3):
+  `<org.jenkinsci.plugins.gwt.GenericTrigger>` under
+  `PipelineTriggersJobProperty`, with `<token>`. An anonymous
+  `POST /generic-webhook-trigger/invoke?token=…` queued the build. Without a
+  token, the same request from an account with `Job/Read` and no `Job/Build`
+  started it too; from an anonymous one it found nothing.
+- **Multibranch branch factories.** The default writes
+  `<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory">`
+  with `<scriptPath>`; inline-pipeline writes
+  `org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory`
+  with `<script>` and `<sandbox>`; pipeline-multibranch-defaults writes
+  `org.jenkinsci.plugins.pipeline.multibranch.defaults.PipelineBranchDefaultsProjectFactory`
+  with `<scriptId>` and `<useSandbox>`. Their branch jobs carry
+  `SCMBinder`, `InlineFlowDefinition` and `DefaultsBinder` definitions.
+- **System Groovy** (`groovy`): `<hudson.plugins.groovy.SystemGroovy>` holding
+  script-security's `<script><script>…</script><sandbox>false</sandbox></script>`.
+- **Maven jobs** (`maven-plugin` 3.27): root element `maven2-moduleset`,
+  `<triggers>` and `<canRoam>` where a freestyle job keeps them.
+
+### Plugin currency on an old core
+
+No endpoint exposes whether the core itself has an update: the update site's
+API carries `dataTimestamp`, `updates` and `availables`, and the core update
+monitor has no API. `hasUpdate` is computed against the update-centre tier for
+the running core, so on an old core it compares against the newest plugin that
+core can run. The plugin currency control says what it can: current for this
+core.
