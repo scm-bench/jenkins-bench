@@ -348,7 +348,7 @@ func (f *Fetcher) listJobs(ctx context.Context, container string, out *[]item) e
 		return nil
 	}
 	for _, it := range listing.Jobs {
-		if isContainer(it.Class) {
+		if isContainer(it) {
 			if err := f.listJobs(ctx, it.FullName, out); err != nil {
 				return err
 			}

@@ -1,6 +1,9 @@
 package jenkins
 
-import "encoding/xml"
+import (
+	"encoding/json"
+	"encoding/xml"
+)
 
 // The shapes a controller actually returns. Field names and the depth needed to
 // populate them were measured, not read from documentation — see
@@ -27,7 +30,10 @@ const (
 	instanceTree = "useSecurity,useCrumbs,numExecutors"
 	computerTree = "computer[_class,displayName,offline,temporarilyOffline,numExecutors,assignedLabels[name]]"
 	pluginTree   = "plugins[shortName,version,enabled,active,hasUpdate]"
-	listingTree  = "jobs[_class,name,fullName,url,disabled,buildable]"
+	// jobs[_class]{0,1} asks each item for at most one child: enough to tell
+	// an item that holds others from one that does not, at the cost of one
+	// small object per folder.
+	listingTree = "jobs[_class,name,fullName,url,disabled,buildable,jobs[_class]{0,1}]"
 )
 
 // item is one entry in a job listing. A folder is an item too.
@@ -44,6 +50,10 @@ type item struct {
 	URL       string `json:"url"`
 	Disabled  bool   `json:"disabled"`
 	Buildable bool   `json:"buildable"`
+	// Children is non-nil exactly when the item exports a jobs array — an
+	// empty one included, which is a folder with nothing in it this token
+	// can see. A job has no jobs array at all.
+	Children []json.RawMessage `json:"jobs"`
 }
 
 // jobListing is GET /api/json?tree=jobs[...] against the root or a folder.
@@ -252,11 +262,21 @@ const (
 )
 
 // isContainer reports whether an item is a container to walk into rather than
-// a job to record. An organization folder is a container too: treating it as a
-// leaf would drop every multibranch project inside it from the scan, silently.
-// (A multibranch project is deliberately NOT a container — its children are
-// generated per-branch copies of one job, and descending would repeat every
-// finding per branch.)
-func isContainer(class string) bool {
-	return class == classFolder || class == classOrgFolder
+// a job to record.
+//
+// Structurally: an item that exports a jobs array holds other items. It used
+// to be two class names, Folder and OrganizationFolder, and anything else was
+// recorded as a job — a CloudBees CI team folder, or any folder subclass a
+// plugin defines, came out as one job of kind "other", and every job inside it
+// vanished from the scan without a word. The two classes stay as a fallback
+// for a listing that did not carry the array.
+//
+// A multibranch project is deliberately NOT a container, although it holds
+// items: its children are generated per-branch copies of one job, and
+// descending would repeat every finding per branch.
+func isContainer(it item) bool {
+	if it.Class == classMultibranch {
+		return false
+	}
+	return it.Children != nil || it.Class == classFolder || it.Class == classOrgFolder
 }

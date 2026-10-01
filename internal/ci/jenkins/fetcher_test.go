@@ -997,3 +997,34 @@ func TestFetcherTakesDisabledFromTheListing(t *testing.T) {
 		t.Errorf("job = %+v, want disabled, not buildable, from the listing", job)
 	}
 }
+
+// Folders come in more classes than two. A CloudBees CI team folder — or any
+// folder subclass a plugin defines — was recorded as a job of kind "other",
+// and every job inside it vanished from the scan without a warning. Whether
+// an item holds others is a structural fact the listing can state: an item
+// group exports a jobs array, a job does not.
+func TestFetcherWalksAnyItemThatHoldsJobs(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"_class":"hudson.model.Hudson","useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"com.cloudbees.opscenter.bluesteel.folder.BlueSteelTeamFolder","name":"team","fullName":"team","url":"http://x/job/team/","jobs":[{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob"}]},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"empty","fullName":"empty","url":"http://x/job/empty/","jobs":[]},
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/job/mb/","jobs":[{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob"}]},
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"}]}`}
+	s.handlers["/job/team/api/json"] = standResponse{body: `{"_class":"com.cloudbees.opscenter.bluesteel.folder.BlueSteelTeamFolder","jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"deploy","fullName":"team/deploy","url":"http://x/job/team/job/deploy/"}]}`}
+	s.handlers["/job/empty/api/json"] = standResponse{body: `{"jobs":[]}`}
+	s.handlers["/job/team/job/deploy/config.xml"] = standResponse{body: `<flow-definition><definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition></flow-definition>`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject/>`}
+
+	snap := fetchFrom(t, s)
+	var names []string
+	for _, j := range snap.Jobs {
+		names = append(names, j.FullName)
+	}
+	if strings.Join(names, ",") != "build,mb,team/deploy" {
+		t.Errorf("jobs = %v, want the team folder walked, the multibranch project kept whole, and no folder recorded as a job", names)
+	}
+	if !snap.Controller.Available[AvailJobs] {
+		t.Error("every container was listed")
+	}
+}
