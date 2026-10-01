@@ -1,0 +1,41 @@
+examples/config.yaml
+  s_48d8fa1c49bfb6::t_3519ea85c1f967 90-114
+internal/cli/scan.go
+  s_48d8fa1c49bfb6::t_5d82a2f6944c9e 243-250,525-527,597-599
+internal/cli/scan_test.go
+  s_48d8fa1c49bfb6::t_dee386621bed0a 969-1011
+internal/config/config.go
+  s_48d8fa1c49bfb6::t_ece942af656008 12,46-112,367-371
+internal/config/config_test.go
+  s_48d8fa1c49bfb6::t_6c6cf16df4b21f 190-223
+internal/engine/engine.go
+  s_48d8fa1c49bfb6::t_44ab854dd947db 10,15,75-85,100-103,139-140,305-309,313-361
+internal/engine/exceptions_test.go
+  s_48d8fa1c49bfb6::t_cad09e35e1e09c 1-146
+internal/engine/score.go
+  s_48d8fa1c49bfb6::t_7c9c17c65260b7 89-91
+internal/report/lines.go
+  s_48d8fa1c49bfb6::t_a52285088f41bd 34,37-38,46,56,82-92
+internal/report/report_test.go
+  s_48d8fa1c49bfb6::t_a77a816942cce6 781-866
+internal/report/sarif.go
+  s_48d8fa1c49bfb6::t_d672a5acea2cc0 113-128,422,432-438,446-453
+internal/report/table.go
+  s_48d8fa1c49bfb6::t_6eaaac1cf9378c 69,84,211-219,406-446,645-647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "97ab2ffc62e2d486cfef4eeb9eb99af167ba8cb1",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
