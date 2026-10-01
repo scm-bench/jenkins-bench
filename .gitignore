@@ -9,3 +9,6 @@ hack/recon/out/
 .venv/
 __pycache__/
 hack/recon/*.json
+
+# The end-to-end suite's API tokens, and every report and snapshot it wrote.
+hack/e2e/out/

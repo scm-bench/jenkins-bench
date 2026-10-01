@@ -46,6 +46,10 @@ Jobs, chosen so one scan produces every verdict:
 The controller itself is misconfigured on purpose: two executors on the built-in
 node, so builds run on the controller.
 
+The image also carries the plugins [`hack/e2e`](../e2e) needs — Generic Webhook
+Trigger, inline-pipeline, pipeline-multibranch-defaults, groovy and the Maven
+plugin — which boots this same image with a fixture of its own.
+
 ## The second posture
 
 `casc-anon.yaml` grants anonymous `Overall/Read`. It exists to prove the
