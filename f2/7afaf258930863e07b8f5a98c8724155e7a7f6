@@ -1,0 +1,35 @@
+internal/ci/jenkins/fetcher.go
+  s_48d8fa1c49bfb6::t_1c618de1d3b8c6 70-75,82-84,375-381,471-472,530-598
+internal/ci/jenkins/fetcher_test.go
+  s_48d8fa1c49bfb6::t_9e2187215329cf 1274-1373
+internal/ci/jenkins/models.go
+  s_48d8fa1c49bfb6::t_e6be22ad9a38e4 40-43
+internal/cli/scan.go
+  s_66212c309e21f0::t_ee7a0dcbc24640 28-30,78-82,108-110,175-181,393-394
+internal/cli/scan_test.go
+  s_48d8fa1c49bfb6::t_bead9db9cf1e87 85,906-939
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f27afaf258930863e07b8f5a98c8724155e7a7f6",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    },
+    "s_66212c309e21f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8763d161-5362-48a1-ae9b-11f7bcd83469",
+        "model": "unknown"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
