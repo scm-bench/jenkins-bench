@@ -68,3 +68,18 @@ test_na_for_a_disabled_job_whose_configuration_was_unreadable if {
 	r := cis_2_1_2.result with input as testdata.job_input({"disabled": true, "available": testdata.without(testdata.job_available, "config")})
 	r.status == "NA"
 }
+
+# A multibranch project whose branch factory supplies an unsandboxed script is
+# the same exposure as an inline pipeline, in every branch at once. v0.1 said
+# NA here.
+test_fails_for_a_multibranch_project_with_an_unsandboxed_factory_script if {
+	r := cis_2_1_2.result with input as testdata.job_input({
+		"kind": "multibranch",
+		"definition": {
+			"source": "inline",
+			"class": "org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory",
+			"sandbox": false, "sandboxKnown": true,
+		},
+	})
+	r.status == "FAIL"
+}

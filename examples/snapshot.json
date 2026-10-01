@@ -86,6 +86,7 @@
       "buildable": true,
       "definition": {
         "source": "scm",
+        "class": "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition",
         "scriptPath": "Jenkinsfile",
         "scmUrls": ["https://git.example.com/platform/api-service.git"],
         "sandbox": false,
@@ -110,6 +111,7 @@
       "buildable": true,
       "definition": {
         "source": "inline",
+        "class": "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition",
         "sandbox": false,
         "sandboxKnown": true
       },
@@ -132,6 +134,8 @@
       "buildable": true,
       "definition": {
         "source": "scm",
+        "class": "org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory",
+        "scriptPath": "Jenkinsfile",
         "scmUrls": ["https://git.example.com/platform/mobile-app.git"],
         "sandbox": false,
         "sandboxKnown": false

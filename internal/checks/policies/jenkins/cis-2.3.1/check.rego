@@ -24,6 +24,13 @@ result := {
 	lib.definition_source == "scm"
 } else := {
 	"status": "FAIL",
+	"details": "Every branch of this multibranch project builds a pipeline script its branch factory supplies from the controller, not the branch's own Jenkinsfile: it is code, but it is not in version control, so it is neither reviewed nor recoverable.",
+	"evidence": ["definition.source = inline", sprintf("branch factory %s", [definition_class])],
+} if {
+	lib.definition_source == "inline"
+	object.get(lib.resource, "kind", "") == "multibranch"
+} else := {
+	"status": "FAIL",
 	"details": "The pipeline script is stored inline in the controller: it is code, but it is not in version control, so it is neither reviewed nor recoverable.",
 	"evidence": ["definition.source = inline"],
 } if {
@@ -36,7 +43,7 @@ result := {
 	lib.definition_source == "ui"
 } else := {
 	"status": "MANUAL",
-	"details": sprintf("The job's definition class (%s) is not one this tool recognises, so whether its build steps are in version control is unknown.", [job_class]),
+	"details": sprintf("The job's definition class (%s) is not one this tool recognises, so whether its build steps are in version control is unknown.", [definition_class]),
 }
 
 script_path := path if {
@@ -48,3 +55,11 @@ job_class := class if {
 	class := object.get(lib.resource, "class", "")
 	class != ""
 } else := "unknown"
+
+# definition_class names what decided the source — a pipeline's definition, a
+# multibranch project's branch factory — falling back to the job's class for
+# the project types, whose root element is the answer.
+definition_class := class if {
+	class := object.get(lib.resource, ["definition", "class"], "")
+	class != ""
+} else := job_class

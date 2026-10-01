@@ -207,7 +207,13 @@ const (
 
 // Definition is how the build is described.
 type Definition struct {
-	Source     string   `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Class is the class that decided Source: a pipeline's <definition>, or
+	// a multibranch project's branch <factory>. Kept because it is what
+	// explains an unknown source, and the job's own class does not — every
+	// pipeline is a WorkflowJob whatever defines it. Empty for the project
+	// types, whose root element is the answer.
+	Class      string   `json:"class,omitempty"`
 	ScriptPath string   `json:"scriptPath,omitempty"`
 	SCMURLs    []string `json:"scmUrls,omitempty"`
 	// Sandbox is whether the Groovy sandbox is on. Only meaningful for
@@ -219,12 +225,14 @@ type Definition struct {
 // Definition sources: the resolved answer to "are the build steps defined as
 // code?".
 const (
-	// SourceSCM is a pipeline read from a Jenkinsfile in version control. A
-	// multibranch project is always this; that is what it does.
+	// SourceSCM is a pipeline read from a Jenkinsfile in version control —
+	// including a multibranch project whose branch factory reads each
+	// branch's own Jenkinsfile, which is the default but not the only kind.
 	SourceSCM = "scm"
 	// SourceInline is a pipeline script stored in the controller. It is code,
 	// but it is not in version control, so it is neither reviewed nor
-	// recoverable.
+	// recoverable. A multibranch project whose factory hands every branch a
+	// script kept on the controller is this too.
 	SourceInline = "inline"
 	// SourceUI is a freestyle or matrix job, whose build steps are
 	// configuration clicked into a form.

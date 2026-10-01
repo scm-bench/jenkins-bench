@@ -139,6 +139,20 @@ type jobConfig struct {
 	PipelineTriggers configTriggers `xml:"properties>org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>triggers"`
 	// Sources is a multibranch project's branch sources.
 	Sources configSources `xml:"sources"`
+	// Factory is how a multibranch project turns a branch into a job: what
+	// its branches build from is decided here, not by the project's class.
+	Factory configFactory `xml:"factory"`
+}
+
+// configFactory is a multibranch project's <factory>. Only the class and the
+// flags are decoded; an inline factory's <script> never leaves the document.
+type configFactory struct {
+	Class      string `xml:"class,attr"`
+	ScriptPath string `xml:"scriptPath"`
+	// Sandbox is inline-pipeline's flag, UseSandbox the defaults plugin's.
+	// Pointers, so an absent flag is not read as an off one.
+	Sandbox    *string `xml:"sandbox"`
+	UseSandbox *string `xml:"useSandbox"`
 }
 
 type configDefinition struct {
@@ -148,8 +162,11 @@ type configDefinition struct {
 	// Sandbox applies to an inline script. A pointer so that absent is
 	// distinguishable from false: absent means the field was not in the
 	// document, which is not the same as the sandbox being off.
-	Sandbox *string   `xml:"sandbox"`
-	SCM     configSCM `xml:"scm"`
+	Sandbox *string `xml:"sandbox"`
+	// UseSandbox is pipeline-multibranch-defaults' spelling of the same flag,
+	// on the definition it gives each branch job.
+	UseSandbox *string   `xml:"useSandbox"`
+	SCM        configSCM `xml:"scm"`
 }
 
 type configSCM struct {
@@ -193,6 +210,25 @@ var triggerDocuments = map[string]bool{
 const (
 	classCpsScmFlowDefinition = "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"
 	classCpsFlowDefinition    = "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition"
+	// The definitions a multibranch project's factories give its branch
+	// jobs, reachable when a branch job is scanned on its own.
+	classSCMBinder            = "org.jenkinsci.plugins.workflow.multibranch.SCMBinder"
+	classInlineFlowDefinition = "org.jenkinsci.plugins.inlinepipeline.InlineFlowDefinition"
+	classDefaultsBinder       = "org.jenkinsci.plugins.pipeline.multibranch.defaults.DefaultsBinder"
+)
+
+// Multibranch branch factories. Each shape was read off a 2.580.1 controller
+// with the plugin that writes it.
+const (
+	// The default: every branch builds the Jenkinsfile at scriptPath in its
+	// own source.
+	classWorkflowBranchProjectFactory = "org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory"
+	// inline-pipeline: every branch builds one <script> stored on the
+	// controller, with or without the sandbox.
+	classInlineBranchProjectFactory = "org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory"
+	// pipeline-multibranch-defaults: every branch builds a Jenkinsfile kept
+	// in a Config File Provider file on the controller.
+	classDefaultsBranchProjectFactory = "org.jenkinsci.plugins.pipeline.multibranch.defaults.PipelineBranchDefaultsProjectFactory"
 )
 
 // Jenkins item classes.

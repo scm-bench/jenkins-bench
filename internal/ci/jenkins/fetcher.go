@@ -555,16 +555,8 @@ func isLabelExpression(s string) bool {
 }
 
 func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
-	// A multibranch project reads a Jenkinsfile from each branch. That is
-	// pipeline-as-code by construction, whatever its <definition> says.
 	if kind == ci.KindMultibranch {
-		def := ci.Definition{Source: ci.SourceSCM}
-		for _, bs := range cfg.Sources.Data.BranchSources {
-			if bs.Source.Remote != "" {
-				def.SCMURLs = append(def.SCMURLs, bs.Source.Remote)
-			}
-		}
-		return def
+		return multibranchDefinition(cfg)
 	}
 
 	if cfg.Definition == nil {
@@ -576,28 +568,72 @@ func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
 		return ci.Definition{Source: ci.SourceUnknown}
 	}
 
-	switch cfg.Definition.Class {
+	d := cfg.Definition
+	switch d.Class {
 	case classCpsScmFlowDefinition:
-		def := ci.Definition{Source: ci.SourceSCM, ScriptPath: cfg.Definition.ScriptPath}
-		for _, rc := range cfg.Definition.SCM.UserRemoteConfigs.Configs {
+		def := ci.Definition{Source: ci.SourceSCM, Class: d.Class, ScriptPath: d.ScriptPath}
+		for _, rc := range d.SCM.UserRemoteConfigs.Configs {
 			if rc.URL != "" {
 				def.SCMURLs = append(def.SCMURLs, rc.URL)
 			}
 		}
 		return def
-	case classCpsFlowDefinition:
-		def := ci.Definition{Source: ci.SourceInline}
-		if cfg.Definition.Sandbox != nil {
-			def.Sandbox = strings.TrimSpace(*cfg.Definition.Sandbox) == "true"
-			def.SandboxKnown = true
-		}
-		return def
+	case classSCMBinder:
+		// A standard multibranch project's branch job: its own branch's
+		// Jenkinsfile.
+		return ci.Definition{Source: ci.SourceSCM, Class: d.Class, ScriptPath: d.ScriptPath}
+	case classCpsFlowDefinition, classInlineFlowDefinition:
+		return withSandbox(ci.Definition{Source: ci.SourceInline, Class: d.Class}, d.Sandbox)
+	case classDefaultsBinder:
+		return withSandbox(ci.Definition{Source: ci.SourceInline, Class: d.Class}, d.UseSandbox)
 	default:
 		// A definition class from a plugin this fetcher has not been taught
 		// about. Distinct from an unreadable configuration, which leaves
 		// available["config"] false and no definition at all.
-		return ci.Definition{Source: ci.SourceUnknown}
+		return ci.Definition{Source: ci.SourceUnknown, Class: d.Class}
 	}
+}
+
+// multibranchDefinition decides what a multibranch project's branches build
+// from, which is its factory's business and not its class's.
+//
+// v0.1 returned "scm" for every multibranch project, on the reasoning that
+// reading a Jenkinsfile per branch is what one does. The factory can say
+// otherwise: inline-pipeline gives every branch one script stored on the
+// controller, sandbox optional, and pipeline-multibranch-defaults one kept in
+// a Config File Provider file. Both scored CIS-2.3.1 PASS and CIS-2.1.2 NA. A
+// factory this fetcher has not been taught is unknown, not assumed to be the
+// default.
+func multibranchDefinition(cfg *jobConfig) ci.Definition {
+	f := cfg.Factory
+	var def ci.Definition
+	switch f.Class {
+	case classWorkflowBranchProjectFactory:
+		def = ci.Definition{Source: ci.SourceSCM, ScriptPath: f.ScriptPath}
+	case classInlineBranchProjectFactory:
+		def = withSandbox(ci.Definition{Source: ci.SourceInline}, f.Sandbox)
+	case classDefaultsBranchProjectFactory:
+		def = withSandbox(ci.Definition{Source: ci.SourceInline}, f.UseSandbox)
+	default:
+		def = ci.Definition{Source: ci.SourceUnknown}
+	}
+	def.Class = f.Class
+	for _, bs := range cfg.Sources.Data.BranchSources {
+		if bs.Source.Remote != "" {
+			def.SCMURLs = append(def.SCMURLs, bs.Source.Remote)
+		}
+	}
+	return def
+}
+
+// withSandbox records a sandbox flag when the document carried one. Absent is
+// not off: it leaves SandboxKnown false, and the control reports MANUAL.
+func withSandbox(def ci.Definition, flag *string) ci.Definition {
+	if flag != nil {
+		def.Sandbox = strings.TrimSpace(*flag) == "true"
+		def.SandboxKnown = true
+	}
+	return def
 }
 
 // triggersFrom collects trigger types and their schedules from both places a
