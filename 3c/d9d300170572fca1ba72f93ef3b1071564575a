@@ -1,0 +1,21 @@
+internal/report/sarif.go
+  s_48d8fa1c49bfb6::t_8cb3711f9c407d 9,14,19-25,33-45,55-66,104-105,116,122,126-143,160-165,167,176-182,184-185,189-194,196-210,212-218,229,234-235,263-264,266-276,291-334,342,348,355,358,364-377,380,382,387,399-402,404-407,409-410,421-452,471
+internal/report/report_test.go
+  s_48d8fa1c49bfb6::t_3142bbc8fb1048 6,587-780
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3cd9d300170572fca1ba72f93ef3b1071564575a",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "unknown"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
