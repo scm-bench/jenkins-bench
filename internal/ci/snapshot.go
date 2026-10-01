@@ -173,6 +173,19 @@ type Job struct {
 	// RemoteTriggerToken is whether one is configured. Never the token.
 	RemoteTriggerToken      bool `json:"remoteTriggerToken"`
 	RemoteTriggerTokenKnown bool `json:"remoteTriggerTokenKnown"`
+	// UnauthenticatedTriggers names each configured way to start this job's
+	// builds that does not go through Jenkins' per-user Job/Build permission:
+	// "authToken" (Trigger builds remotely) or "GenericTrigger" (Generic
+	// Webhook Trigger). Mechanisms, never a token.
+	UnauthenticatedTriggers []string `json:"unauthenticatedTriggers,omitempty"`
+	// UnrecognizedTriggers are trigger classes the fetcher has not been
+	// taught, so whether they skip that authorization is unknown.
+	UnrecognizedTriggers []string `json:"unrecognizedTriggers,omitempty"`
+	// TriggersKnown is whether the configuration read is where this job's
+	// triggers live. False for a multibranch project: its builds run under
+	// triggers declared in each branch's Jenkinsfile, which land in the
+	// generated branch jobs, and the scan does not read those.
+	TriggersKnown bool `json:"triggersKnown"`
 	// RunsOnBuiltInNode is resolved by the fetcher from the job's label
 	// expression, its canRoam flag and the built-in node's labels. A rule asks
 	// whether the job can run on the controller, never how labels match.

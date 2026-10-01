@@ -500,6 +500,21 @@ func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Contro
 	job.Definition = definitionFrom(job.Kind, cfg)
 	job.Triggers = triggersFrom(cfg)
 
+	var classes []string
+	for _, entries := range [][]configTrigger{cfg.Triggers.Entries, cfg.PipelineTriggers.Entries} {
+		for _, t := range entries {
+			classes = append(classes, t.XMLName.Local)
+		}
+	}
+	assessed := assessTriggers(job.RemoteTriggerToken, classes)
+	job.UnauthenticatedTriggers = assessed.unauthenticated
+	job.UnrecognizedTriggers = assessed.unrecognized
+	// A multibranch project's own <triggers> are its re-scan schedule. What
+	// starts its builds is declared in each branch's Jenkinsfile and lands in
+	// the generated branch jobs, which the scan does not descend into — so
+	// the answer is unknown, whatever the project itself says.
+	job.TriggersKnown = job.Kind != ci.KindMultibranch && triggerDocuments[cfg.XMLName.Local]
+
 	// Where a job runs. A pipeline picks its agent in the Jenkinsfile, which
 	// the controller does not parse into anything readable, so the answer is
 	// unknown rather than false.

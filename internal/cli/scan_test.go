@@ -576,3 +576,67 @@ func TestIncompleteSummaryNamesTheContainers(t *testing.T) {
 		}
 	}
 }
+
+// verdicts runs a JSON scan and returns each finding's status by control and
+// resource.
+func verdicts(t *testing.T, args ...string) (map[string]string, error) {
+	t.Helper()
+	out, err := runScanCmd(t, append(args, "--format", "json")...)
+	var rep struct {
+		Findings []struct {
+			CheckID  string `json:"checkId"`
+			Resource string `json:"resource"`
+			Status   string `json:"status"`
+		} `json:"findings"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &rep); jsonErr != nil {
+		t.Fatalf("not a JSON report (%v): %v\n%s", jsonErr, err, out)
+	}
+	got := map[string]string{}
+	for _, f := range rep.Findings {
+		got[f.CheckID+" "+f.Resource] = f.Status
+	}
+	return got, err
+}
+
+// The false PASS the audit found first: a Generic Webhook Trigger token starts
+// a build through POST /generic-webhook-trigger/invoke?token=… with no Jenkins
+// login at all (verified against 2.580.1), and v0.1 only ever looked at
+// <authToken>. A multibranch project passed too, although the triggers its
+// builds run under are declared in each branch's Jenkinsfile and land in branch
+// jobs the scan never reads.
+func TestScanJudgesTriggersBeyondAuthToken(t *testing.T) {
+	gwt := `<?xml version='1.1' encoding='UTF-8'?><flow-definition>
+		<properties><org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty><triggers>
+		<org.jenkinsci.plugins.gwt.GenericTrigger plugin="generic-webhook-trigger@2.4.3"><spec></spec><token>s3cret</token></org.jenkinsci.plugins.gwt.GenericTrigger>
+		</triggers></org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty></properties>
+		<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition>
+		<disabled>false</disabled></flow-definition>`
+	mb := `<?xml version='1.1' encoding='UTF-8'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>
+		<triggers/><disabled>false</disabled>
+		<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory"><scriptPath>Jenkinsfile</scriptPath></factory>
+		</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`
+	serve := func(body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }
+	}
+	srv := controllerServing(t, false,
+		hardenedJob+`,{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"gwt","fullName":"gwt","url":"http://x/job/gwt/"}`+
+			`,{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/job/mb/"}`,
+		map[string]http.HandlerFunc{
+			"/job/gwt/api/json":   serve(`{"disabled":false,"buildable":true}`),
+			"/job/gwt/config.xml": serve(gwt),
+			"/job/mb/api/json":    serve(`{"buildable":true}`),
+			"/job/mb/config.xml":  serve(mb),
+		})
+
+	got, _ := verdicts(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t")
+	for key, want := range map[string]string{
+		"CIS-2.3.5 gwt": "FAIL",
+		"CIS-2.3.5 mb":  "MANUAL",
+		"CIS-2.3.5 app": "PASS",
+	} {
+		if got[key] != want {
+			t.Errorf("%s = %q, want %s", key, got[key], want)
+		}
+	}
+}

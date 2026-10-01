@@ -94,6 +94,7 @@
       "triggers": [{ "type": "SCMTrigger", "spec": "H/15 * * * *" }],
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": true,
       "runsOnBuiltInNode": false,
       "runsOnBuiltInNodeKnown": false,
       "available": { "api": true, "config": true }
@@ -115,6 +116,7 @@
       "triggers": [{ "type": "TimerTrigger", "spec": "H 2 * * *" }],
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": true,
       "runsOnBuiltInNode": false,
       "runsOnBuiltInNodeKnown": false,
       "available": { "api": true, "config": true }
@@ -136,6 +138,7 @@
       },
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": false,
       "runsOnBuiltInNode": false,
       "runsOnBuiltInNodeKnown": false,
       "available": { "api": true, "config": true }
@@ -153,6 +156,8 @@
       "triggers": [{ "type": "TimerTrigger", "spec": "H 3 * * *" }],
       "remoteTriggerToken": true,
       "remoteTriggerTokenKnown": true,
+      "unauthenticatedTriggers": ["authToken"],
+      "triggersKnown": true,
       "runsOnBuiltInNode": true,
       "runsOnBuiltInNodeKnown": true,
       "available": { "api": true, "config": true }
@@ -188,6 +193,7 @@
       "definition": { "source": "ui", "sandbox": false, "sandboxKnown": false },
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": true,
       "runsOnBuiltInNode": true,
       "runsOnBuiltInNodeKnown": true,
       "available": { "api": true, "config": true }

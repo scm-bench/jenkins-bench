@@ -179,6 +179,16 @@ type configTrigger struct {
 	Spec    string `xml:"spec"`
 }
 
+// triggerDocuments are the configuration documents whose triggers are where
+// this fetcher reads them: <triggers> under the root for the project types, and
+// under PipelineTriggersJobProperty for a pipeline. A job type outside the set
+// may keep them anywhere, so its triggers are not taken as known.
+var triggerDocuments = map[string]bool{
+	"project":         true,
+	"matrix-project":  true,
+	"flow-definition": true,
+}
+
 // Definition classes, as they appear in config.xml.
 const (
 	classCpsScmFlowDefinition = "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"

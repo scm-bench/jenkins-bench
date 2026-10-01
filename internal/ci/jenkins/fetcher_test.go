@@ -696,3 +696,105 @@ func TestFetcherRecordsACompleteJobList(t *testing.T) {
 		t.Errorf("available = %v, unlisted = %v", snap.Controller.Available, snap.Controller.Unlisted)
 	}
 }
+
+// triggerJob serves one pipeline whose PipelineTriggersJobProperty holds the
+// given trigger elements.
+func triggerJob(t *testing.T, triggers string) ci.Job {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"p","fullName":"p","url":"http://x/job/p/"}]}`}
+	s.handlers["/job/p/api/json"] = standResponse{body: `{"disabled":false,"buildable":true}`}
+	s.handlers["/job/p/config.xml"] = standResponse{body: `<?xml version='1.1' encoding='UTF-8'?><flow-definition>
+		<properties><org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty><triggers>` + triggers + `
+		</triggers></org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty></properties>
+		<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition>
+		</flow-definition>`}
+	return fetchFrom(t, s).Jobs[0]
+}
+
+// The shape generic-webhook-trigger 2.4.3 writes, read off a 2.580.1
+// controller. Its token starts the build with no Jenkins login, and the
+// snapshot must say so without carrying the token.
+func TestFetcherRecognisesAGenericWebhookTrigger(t *testing.T) {
+	job := triggerJob(t, `<org.jenkinsci.plugins.gwt.GenericTrigger plugin="generic-webhook-trigger@2.4.3">
+		<spec></spec><genericVariables/><token>s3cret-gwt</token><silentResponse>false</silentResponse>
+		</org.jenkinsci.plugins.gwt.GenericTrigger>`)
+	if len(job.UnauthenticatedTriggers) != 1 || job.UnauthenticatedTriggers[0] != "GenericTrigger" {
+		t.Errorf("unauthenticatedTriggers = %v, want [GenericTrigger]", job.UnauthenticatedTriggers)
+	}
+	if !job.TriggersKnown {
+		t.Error("a pipeline's triggers are in its own configuration")
+	}
+	encoded, _ := json.Marshal(job)
+	if strings.Contains(string(encoded), "s3cret-gwt") {
+		t.Error("the snapshot carries the webhook token")
+	}
+}
+
+// Without a token a Generic Webhook Trigger is still a way round Job/Build:
+// anyone who can read the job starts it (measured: a Job/Read-only account
+// did).
+func TestFetcherRecognisesATokenlessGenericWebhookTrigger(t *testing.T) {
+	job := triggerJob(t, `<org.jenkinsci.plugins.gwt.GenericTrigger><spec></spec></org.jenkinsci.plugins.gwt.GenericTrigger>`)
+	if len(job.UnauthenticatedTriggers) != 1 {
+		t.Errorf("unauthenticatedTriggers = %v", job.UnauthenticatedTriggers)
+	}
+}
+
+func TestFetcherAcceptsTriggersThatGoThroughJenkins(t *testing.T) {
+	job := triggerJob(t, `<hudson.triggers.SCMTrigger><spec>H/15 * * * *</spec></hudson.triggers.SCMTrigger>
+		<hudson.triggers.TimerTrigger><spec>H 2 * * *</spec></hudson.triggers.TimerTrigger>
+		<jenkins.triggers.ReverseBuildTrigger><spec></spec><upstreamProjects>a</upstreamProjects></jenkins.triggers.ReverseBuildTrigger>
+		<com.cloudbees.jenkins.GitHubPushTrigger plugin="github@1.40"><spec></spec></com.cloudbees.jenkins.GitHubPushTrigger>`)
+	if len(job.UnauthenticatedTriggers) != 0 || len(job.UnrecognizedTriggers) != 0 {
+		t.Errorf("unauthenticated = %v, unrecognized = %v; all four go through Jenkins", job.UnauthenticatedTriggers, job.UnrecognizedTriggers)
+	}
+	if len(job.Triggers) != 4 {
+		t.Errorf("triggers = %+v", job.Triggers)
+	}
+}
+
+// A trigger class nobody taught the fetcher is neither safe nor unsafe.
+func TestFetcherRecordsTriggersItDoesNotKnow(t *testing.T) {
+	job := triggerJob(t, `<com.example.MysteryTrigger><spec></spec></com.example.MysteryTrigger>`)
+	if len(job.UnrecognizedTriggers) != 1 || job.UnrecognizedTriggers[0] != "com.example.MysteryTrigger" {
+		t.Errorf("unrecognizedTriggers = %v", job.UnrecognizedTriggers)
+	}
+	if len(job.UnauthenticatedTriggers) != 0 {
+		t.Errorf("unauthenticatedTriggers = %v; an unknown class proves nothing", job.UnauthenticatedTriggers)
+	}
+}
+
+// The core token lives in <authToken>, not among the triggers.
+func TestFetcherCountsTheRemoteTriggerTokenAsUnauthenticated(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/job/build/config.xml"] = standResponse{body: `<?xml version='1.1'?><project>
+		<canRoam>true</canRoam><authToken>tok</authToken></project>`}
+	job := fetchFrom(t, s).Jobs[0]
+	if len(job.UnauthenticatedTriggers) != 1 || job.UnauthenticatedTriggers[0] != "authToken" {
+		t.Errorf("unauthenticatedTriggers = %v, want [authToken]", job.UnauthenticatedTriggers)
+	}
+	if !job.TriggersKnown {
+		t.Error("a freestyle job's triggers are in its own configuration")
+	}
+}
+
+// What starts a multibranch project's builds is declared in each branch's
+// Jenkinsfile and lands in the branch jobs, which the fetcher does not read.
+func TestFetcherDoesNotKnowAMultibranchProjectsTriggers(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/"}]}`}
+	s.handlers["/job/mb/api/json"] = standResponse{body: `{"buildable":true}`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<?xml version='1.1'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>
+		<triggers><com.cloudbees.hudson.plugins.folder.computed.PeriodicFolderTrigger><spec>H * * * *</spec><interval>3600000</interval></com.cloudbees.hudson.plugins.folder.computed.PeriodicFolderTrigger></triggers>
+		</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+	job := fetchFrom(t, s).Jobs[0]
+	if job.TriggersKnown {
+		t.Error("a multibranch project's build triggers are in its branch jobs, which were not read")
+	}
+	if len(job.UnrecognizedTriggers) != 0 {
+		t.Errorf("the re-scan schedule is a known trigger: %v", job.UnrecognizedTriggers)
+	}
+}
