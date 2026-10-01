@@ -491,3 +491,44 @@ func TestSameOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A body past the cap used to be cut off silently and decoded as if whole.
+// It is an error now, and not retried: the next attempt would be as large.
+func TestClientRefusesABodyPastTheCap(t *testing.T) {
+	old := maxBody
+	maxBody = 16
+	t.Cleanup(func() { maxBody = old })
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Write([]byte(`{"jobs":[{"name":"a"},{"name":"b"}]}`))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(Options{BaseURL: srv.URL, MaxRetries: 2})
+	err := c.GetJSON(context.Background(), "/api/json", nil)
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("an oversized body must be an error saying so: %v", err)
+	}
+	if attempts.Load() != 1 {
+		t.Errorf("an oversized body was retried %d times", attempts.Load()-1)
+	}
+
+	maxBody = 1 << 10
+	if err := c.GetJSON(context.Background(), "/api/json", nil); err != nil {
+		t.Errorf("a body under the cap is read: %v", err)
+	}
+}
+
+// Eight requests in flight need eight connections kept open, or each one is a
+// fresh TCP and TLS handshake against the controller.
+func TestClientKeepsAConnectionPerConcurrentRequest(t *testing.T) {
+	c, err := NewClient(Options{BaseURL: "https://jenkins.example.com", Concurrency: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.httpClient.Transport.(*http.Transport).MaxIdleConnsPerHost; got != 8 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 8", got)
+	}
+}

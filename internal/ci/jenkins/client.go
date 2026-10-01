@@ -56,6 +56,9 @@ type Options struct {
 
 	Timeout    time.Duration
 	MaxRetries int
+	// Concurrency is how many requests the caller keeps in flight, so that
+	// many connections stay open between them.
+	Concurrency int
 	// Insecure disables certificate verification.
 	Insecure bool
 	// AllowPlaintext permits sending credentials over http:// to a non-loopback
@@ -96,6 +99,13 @@ func NewClient(opts Options) (*Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if opts.Insecure {
 		transport.TLSClientConfig = tlsInsecureConfig()
+	}
+	// net/http keeps two idle connections per host by default. With eight
+	// job fetches in flight the other six were torn down after every
+	// request, and a 400-job scan opened 246 TCP connections — a TLS
+	// handshake each, against a production controller.
+	if opts.Concurrency > http.DefaultMaxIdleConnsPerHost {
+		transport.MaxIdleConnsPerHost = opts.Concurrency
 	}
 
 	return &Client{
@@ -251,9 +261,20 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 			continue
 		}
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		// One byte over the cap is read so that a body at the cap can be
+		// told from one past it. A cut-off body used to be decoded as if it
+		// were whole — an "unexpected end of JSON input" at best, and for an
+		// XML document a parse of whatever made it through.
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(maxBody)+1))
 		resp.Body.Close()
+		if readErr == nil && len(body) > maxBody {
+			readErr = errBodyTooLarge
+		}
 		c.emit(req.Method, path, resp.StatusCode, time.Since(started), attempt, readErr)
+		if errors.Is(readErr, errBodyTooLarge) {
+			// Retrying would fetch the same too-large body again.
+			return nil, resp.Header, fmt.Errorf("GET %s: %w", path, readErr)
+		}
 		if readErr != nil {
 			lastErr = fmt.Errorf("GET %s: read body: %w", path, readErr)
 			continue
@@ -303,6 +324,14 @@ func (c *Client) warnf(format string, args ...any) {
 		c.Warnf(format, args...)
 	}
 }
+
+// maxBody caps one response. Every endpoint is asked for a handful of fields
+// per item, so a body this large is something other than the API answering.
+// A variable only so a test need not allocate 64 MiB to cross it.
+var maxBody = 64 << 20
+
+// errBodyTooLarge is a response past maxBody.
+var errBodyTooLarge = errors.New("the response is larger than the 64 MiB this scan reads, so it was not used")
 
 // maxRedirects bounds how many same-origin redirects one request follows.
 const maxRedirects = 5

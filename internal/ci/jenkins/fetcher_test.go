@@ -961,3 +961,39 @@ func TestFetcherReadsTheVersionWithoutVisitingTheLoginPage(t *testing.T) {
 		t.Error("the fetcher requested /login")
 	}
 }
+
+// Every API request names its fields. Without tree=, the root API renders a
+// colour per job, a job's API up to a hundred builds and every last*Build, and
+// the node list each label's tiedJobs — on a large controller, the timeouts
+// and the response cap, for nothing any control reads. The credentials
+// endpoint is the one exception: a tree= over its map-valued stores returns
+// no credentials at any depth (docs/jenkins-api-notes.md), so it takes depth=3.
+func TestFetcherAsksOnlyForTheFieldsItReads(t *testing.T) {
+	s := hardened(t)
+	fetchFrom(t, s)
+	for _, p := range s.paths {
+		switch {
+		case strings.HasSuffix(p, "/config.xml"):
+		case p == "/credentials/api/json?depth=3":
+		case strings.Contains(p, "/api/json?tree="):
+		default:
+			t.Errorf("GET %s names no fields", p)
+		}
+	}
+	// A job's own API is no longer requested at all: the listing that found
+	// it already carried disabled and buildable.
+	if s.requested("/job/build/api/json") {
+		t.Error("the per-job API was requested; the listing carries what it was read for")
+	}
+}
+
+// Whether a job is disabled now comes from the listing that found it.
+func TestFetcherTakesDisabledFromTheListing(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/","disabled":true,"buildable":false}]}`}
+	job := fetchFrom(t, s).Jobs[0]
+	if !job.Disabled || job.Buildable || !job.Available[AvailJobAPI] {
+		t.Errorf("job = %+v, want disabled, not buildable, from the listing", job)
+	}
+}

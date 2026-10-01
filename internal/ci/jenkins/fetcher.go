@@ -120,7 +120,7 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 	c := &ci.Controller{Available: map[string]bool{}}
 
 	var inst instance
-	headers, err := f.client.GetJSONHeaders(ctx, "/api/json", &inst)
+	headers, err := f.client.GetJSONHeaders(ctx, "/api/json?tree="+instanceTree, &inst)
 	c.Available[AvailRoot] = err == nil
 	// The version arrives as a response header on every response, a refusal
 	// included, so it is knowable even when nothing else is. It used to come
@@ -168,7 +168,7 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 	}
 
 	// Measured, not read. See ProbeAnonymous.
-	allowed, conclusive := f.client.ProbeAnonymous(ctx, "/api/json")
+	allowed, conclusive := f.client.ProbeAnonymous(ctx, "/api/json?tree=useSecurity")
 	c.Security.AnonymousRead, c.Security.AnonymousReadKnown = allowed, conclusive
 	if !conclusive {
 		c.Errors = append(c.Errors, "the unauthenticated probe did not reach a conclusion")
@@ -183,7 +183,7 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 
 func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 	var nodes computers
-	if err := f.client.GetJSON(ctx, "/computer/api/json?depth=1", &nodes); err != nil {
+	if err := f.client.GetJSON(ctx, "/computer/api/json?tree="+computerTree, &nodes); err != nil {
 		c.Available[AvailAgents] = false
 		c.Errors = append(c.Errors, fmt.Sprintf("the node list could not be read (%v)", err))
 		return
@@ -219,7 +219,7 @@ func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 
 func (f *Fetcher) fetchPlugins(ctx context.Context, c *ci.Controller) {
 	var pm pluginManager
-	if err := f.client.GetJSON(ctx, "/pluginManager/api/json?depth=1", &pm); err != nil {
+	if err := f.client.GetJSON(ctx, "/pluginManager/api/json?tree="+pluginTree, &pm); err != nil {
 		c.Available[AvailPlugins] = false
 		c.Errors = append(c.Errors, fmt.Sprintf("the plugin list could not be read (%v); Overall/Administer is required", err))
 		if IsForbidden(err) {
@@ -242,7 +242,7 @@ func (f *Fetcher) fetchPlugins(ctx context.Context, c *ci.Controller) {
 
 func (f *Fetcher) fetchUpdateSite(ctx context.Context, c *ci.Controller) {
 	var site updateSite
-	if err := f.client.GetJSON(ctx, "/updateCenter/site/default/api/json", &site); err != nil {
+	if err := f.client.GetJSON(ctx, "/updateCenter/site/default/api/json?tree=url,dataTimestamp", &site); err != nil {
 		c.Available[AvailUpdateSite] = false
 		c.Errors = append(c.Errors, fmt.Sprintf("the update site could not be read (%v)", err))
 		return
@@ -325,7 +325,7 @@ func (f *Fetcher) listJobs(ctx context.Context, container string, out *[]item) e
 	if container != "" {
 		prefix = jobPath(container)
 	}
-	path := prefix + "/api/json?tree=jobs[fullName,name,url,_class]"
+	path := prefix + "/api/json?tree=" + listingTree
 	if err := f.client.GetJSON(ctx, path, &listing); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -437,18 +437,15 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 	}
 	path := jobPath(it.FullName)
 
-	var detail jobDetail
-	if err := f.client.GetJSON(ctx, path+"/api/json", &detail); err != nil {
-		if ctx.Err() != nil {
-			return job, ctx.Err()
-		}
-		job.Available[AvailJobAPI] = false
-		job.Errors = append(job.Errors, fmt.Sprintf("the job API could not be read (%v)", err))
-	} else {
-		job.Available[AvailJobAPI] = true
-		job.Disabled = detail.Disabled
-		job.Buildable = detail.Buildable
-	}
+	// What a Job/Read token can see of a job — whether it is disabled, and
+	// buildable — came from the listing that found it. It used to cost a
+	// request per job of its own, to /job/<path>/api/json with no tree=,
+	// which renders up to a hundred builds, the health report and every
+	// last*Build for each job: on a large controller, the bulk of a scan's
+	// load for two booleans.
+	job.Available[AvailJobAPI] = true
+	job.Disabled = it.Disabled
+	job.Buildable = it.Buildable
 
 	body, err := f.client.GetRaw(ctx, path+"/config.xml")
 	if err != nil {

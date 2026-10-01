@@ -17,12 +17,33 @@ type instance struct {
 	UseCrumbs    *bool `json:"useCrumbs"`
 }
 
+// Every endpoint is asked for the fields the scan reads and nothing else.
+// Without tree=, Jenkins renders whatever the object exports at the default
+// depth: the root API a colour per job, a job's API up to a hundred builds and
+// every last*Build, the node list each label's tiedJobs. On a large controller
+// that is what hits the request timeout and the response cap, for fields no
+// control reads.
+const (
+	instanceTree = "useSecurity,useCrumbs,numExecutors"
+	computerTree = "computer[_class,displayName,offline,temporarilyOffline,numExecutors,assignedLabels[name]]"
+	pluginTree   = "plugins[shortName,version,enabled,active,hasUpdate]"
+	listingTree  = "jobs[_class,name,fullName,url,disabled,buildable]"
+)
+
 // item is one entry in a job listing. A folder is an item too.
+//
+// disabled and buildable are everything a Job/Read token can see of how a job
+// behaves, and notably not much: no definition, no sandbox, no authToken, no
+// assignedNode. All of those live in config.xml, which needs Job/ExtendedRead.
+// A multibranch project exports buildable only; its disabled flag is read from
+// its configuration.
 type item struct {
-	Class    string `json:"_class"`
-	Name     string `json:"name"`
-	FullName string `json:"fullName"`
-	URL      string `json:"url"`
+	Class     string `json:"_class"`
+	Name      string `json:"name"`
+	FullName  string `json:"fullName"`
+	URL       string `json:"url"`
+	Disabled  bool   `json:"disabled"`
+	Buildable bool   `json:"buildable"`
 }
 
 // jobListing is GET /api/json?tree=jobs[...] against the root or a folder.
@@ -30,18 +51,7 @@ type jobListing struct {
 	Jobs []item `json:"jobs"`
 }
 
-// jobDetail is GET /job/<path>/api/json.
-//
-// This is everything a Job/Read token can see, and it is notably not much: no
-// definition, no sandbox, no authToken, no assignedNode. All of those live in
-// config.xml, which needs Job/ExtendedRead.
-type jobDetail struct {
-	FullName  string `json:"fullName"`
-	Disabled  bool   `json:"disabled"`
-	Buildable bool   `json:"buildable"`
-}
-
-// computers is GET /computer/api/json?depth=1.
+// computers is GET /computer/api/json?tree=computer[...].
 type computers struct {
 	Computer []computer `json:"computer"`
 }
@@ -63,7 +73,8 @@ type label struct {
 // hudson.slaves.SlaveComputer.
 const builtInComputerClass = "hudson.model.Hudson$MasterComputer"
 
-// pluginManager is GET /pluginManager/api/json?depth=1 (Overall/Administer).
+// pluginManager is GET /pluginManager/api/json?tree=plugins[...]
+// (Overall/SystemRead, which Overall/Administer implies).
 // No security-warning or deprecation field exists; Jenkins renders those from
 // a feed on updates.jenkins.io, not from the controller.
 type pluginManager struct {

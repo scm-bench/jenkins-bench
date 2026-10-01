@@ -261,6 +261,7 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 		Token:          token,
 		Timeout:        cfg.Scan.Timeout.Get(),
 		MaxRetries:     2,
+		Concurrency:    cfg.Scan.Concurrency,
 		Insecure:       cfg.Scan.Insecure,
 		AllowPlaintext: cfg.Scan.AllowPlaintext,
 		Warnf: func(format string, args ...any) {
