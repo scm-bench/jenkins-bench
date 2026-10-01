@@ -1,0 +1,27 @@
+examples/snapshot.json
+  s_48d8fa1c49bfb6::t_18ef008441e032 26-29
+internal/ci/jenkins/fetcher.go
+  s_48d8fa1c49bfb6::t_8f6867d80cd16d 171-179,214,216,476-486,670-676,678,680-699,703-714,716-718
+internal/ci/jenkins/fetcher_test.go
+  s_48d8fa1c49bfb6::t_f37a786a6f7988 1182-1243
+internal/ci/jenkins/models.go
+  s_48d8fa1c49bfb6::t_0b7a0f456a5ec9 21-24,34
+internal/ci/snapshot.go
+  s_48d8fa1c49bfb6::t_d7ad15733fd2e6 101-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a51eaad6e8f2f3d69e2fe7e61c7a2b5e2ad58687",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
