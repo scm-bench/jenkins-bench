@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -37,6 +39,7 @@ type scanOptions struct {
 	maxResources   int
 	noRemediations bool
 	noColor        bool
+	verbose        bool
 
 	scan config.Scan
 }
@@ -115,6 +118,7 @@ token that can read very little is the common case.`,
 	f.IntVar(&opts.maxResources, "max-resources", report.DefaultMaxResources, "with --details: how many resources get a section of their own; 0 means every one")
 	f.BoolVar(&opts.noRemediations, "no-remediations", false, "omit the remediation section")
 	f.BoolVar(&opts.noColor, "no-color", false, "disable ANSI colour")
+	f.BoolVarP(&opts.verbose, "verbose", "v", false, "print every request on stderr as it completes")
 
 	// Deployment settings live in the config, not in flags — but an error
 	// message or muscle memory that suggests the flag form should meet
@@ -185,7 +189,20 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		return fmt.Errorf("unknown report format %q for -o; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
 	}
 
-	snapshot, err := obtainSnapshot(ctx, opts, cfg)
+	// The tracer exists even when it prints nothing per request: its closing
+	// line accounts for what the token was used for, and that belongs in a
+	// CI log as much as on a terminal.
+	stderr := cmd.ErrOrStderr()
+	colour := !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)
+	trace := newTracer(stderr, colour, opts.verbose)
+	// One self-overwriting line on a terminal, unless every request is
+	// already being printed.
+	progress := newProgressWriter(stderr, !opts.verbose)
+	snapshot, err := obtainSnapshot(ctx, stderr, colour, opts, cfg, trace, progress)
+	progress.clear()
+	if line, tag := trace.summary(); line != "" {
+		console.Writer{W: stderr, P: console.Painter{Enabled: colour}}.Line(tag, "%s", line)
+	}
 	if err != nil {
 		return err
 	}
@@ -300,7 +317,7 @@ func loadScanConfig(opts *scanOptions) (config.Config, string, error) {
 	return cfg, path, nil
 }
 
-func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (*ci.Snapshot, error) {
+func obtainSnapshot(ctx context.Context, stderr io.Writer, colour bool, opts *scanOptions, cfg config.Config, trace *tracer, progress *progressWriter) (*ci.Snapshot, error) {
 	if opts.snapshotIn != "" {
 		return readSnapshot(opts.snapshotIn)
 	}
@@ -322,8 +339,11 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 
 	// Warnings go to stderr as they happen, not only into the snapshot —
 	// "your token cannot read this" said only inside a JSON field reads as a
-	// broken tool. stderr, so a piped report stays clean.
-	warn := StderrWriter()
+	// broken tool. stderr, so a piped report stays clean. They arrive from the
+	// fetch goroutines, so one lock covers each whole line, and the progress
+	// line steps aside for them.
+	warn := console.Writer{W: stderr, P: console.Painter{Enabled: colour}}
+	var warnMu sync.Mutex
 	client, err := jenkins.NewClient(jenkins.Options{
 		BaseURL:        baseURL,
 		Username:       username,
@@ -334,15 +354,23 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 		Insecure:       cfg.Scan.Insecure,
 		AllowPlaintext: cfg.Scan.AllowPlaintext,
 		Warnf: func(format string, args ...any) {
-			warn.Line(console.Warn, format, args...)
+			warnMu.Lock()
+			defer warnMu.Unlock()
+			progress.interrupt(func() { warn.Line(console.Warn, format, args...) })
+		},
+		OnRequest: func(e jenkins.RequestEvent) {
+			trace.record(e)
+			progress.tick()
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	progress.start()
 	fetcher := jenkins.NewFetcher(client)
 	fetcher.ToolVersion = Version
+	fetcher.Progress = progress.jobsRead
 	if cfg.Scan.Concurrency > 0 {
 		fetcher.Concurrency = cfg.Scan.Concurrency
 	}

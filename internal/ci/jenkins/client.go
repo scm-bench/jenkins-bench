@@ -28,7 +28,6 @@ type Client struct {
 	username    string
 	token       string
 	maxRetries  int
-	onRequest   func(RequestEvent)
 
 	// Logf receives progress detail. Nil means silent.
 	Logf func(format string, args ...any)
@@ -36,8 +35,9 @@ type Client struct {
 	Warnf func(format string, args ...any)
 }
 
-// RequestEvent reports one completed request, for progress display and for the
-// scan trace.
+// RequestEvent reports one request the client sent — each attempt, and each
+// redirect hop it followed — for the scan trace, its closing account of what
+// was sent, and the progress line.
 type RequestEvent struct {
 	Method  string
 	Path    string
@@ -111,16 +111,17 @@ func NewClient(opts Options) (*Client, error) {
 		transport.MaxIdleConnsPerHost = opts.Concurrency
 	}
 
+	observed := &observedTransport{base: transport, onRequest: opts.OnRequest}
 	return &Client{
 		baseURL: u,
 		httpClient: &http.Client{
 			Timeout:       timeout,
-			Transport:     transport,
+			Transport:     observed,
 			CheckRedirect: checkRedirect,
 		},
 		probeClient: &http.Client{
 			Timeout:   timeout,
-			Transport: transport,
+			Transport: observed,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -128,10 +129,51 @@ func NewClient(opts Options) (*Client, error) {
 		username:   opts.Username,
 		token:      opts.Token,
 		maxRetries: opts.MaxRetries,
-		onRequest:  opts.OnRequest,
 		Logf:       opts.Logf,
 		Warnf:      opts.Warnf,
 	}, nil
+}
+
+// attemptKey carries a request's attempt number to the transport that
+// reports it.
+type attemptKey struct{}
+
+// observedTransport sees every request the client actually sends, and is the
+// last place one can be stopped.
+//
+// The scan's closing line accounts for what was sent, and it is only worth
+// trusting if it counts at the wire: a redirect hop the client follows is a
+// request too, and was invisible to a count kept per call. And the read-only
+// promise is kept here as well as by the API's shape — a method other than GET
+// or HEAD is refused before it leaves the process, and still reported, so the
+// account says NOT READ-ONLY rather than nothing.
+type observedTransport struct {
+	base      http.RoundTripper
+	onRequest func(RequestEvent)
+}
+
+func (t *observedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	attempt, _ := req.Context().Value(attemptKey{}).(int)
+	event := RequestEvent{Method: req.Method, Path: req.URL.RequestURI(), Attempt: attempt}
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		event.Err = fmt.Errorf("refused to send %s %s: this tool only reads", req.Method, req.URL.Path)
+		t.emit(event)
+		return nil, event.Err
+	}
+	started := time.Now()
+	resp, err := t.base.RoundTrip(req)
+	event.Took, event.Err = time.Since(started), err
+	if resp != nil {
+		event.Status = resp.StatusCode
+	}
+	t.emit(event)
+	return resp, err
+}
+
+func (t *observedTransport) emit(e RequestEvent) {
+	if t.onRequest != nil {
+		t.onRequest(e)
+	}
 }
 
 // BaseURL returns the controller root.
@@ -282,7 +324,7 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 		}
 		waited = false
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		req, err := http.NewRequestWithContext(context.WithValue(ctx, attemptKey{}, attempt), http.MethodGet, endpoint.String(), nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("build request for %s: %w", path, err)
 		}
@@ -295,14 +337,12 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 			}
 		}
 
-		started := time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
 			// Transport errors are worth retrying; a cancelled context is not.
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
-			c.emit(req.Method, path, 0, time.Since(started), attempt, err)
 			// Nor is a redirect this client refused to follow: the next
 			// attempt would be refused the same way.
 			var refused *redirectError
@@ -322,7 +362,6 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 		if readErr == nil && len(body) > maxBody {
 			readErr = errBodyTooLarge
 		}
-		c.emit(req.Method, path, resp.StatusCode, time.Since(started), attempt, readErr)
 		if errors.Is(readErr, errBodyTooLarge) {
 			// Retrying would fetch the same too-large body again.
 			return nil, resp.Header, fmt.Errorf("GET %s: %w", path, readErr)
@@ -356,13 +395,6 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 		}
 	}
 	return nil, nil, lastErr
-}
-
-func (c *Client) emit(method, path string, status int, took time.Duration, attempt int, err error) {
-	if c.onRequest == nil {
-		return
-	}
-	c.onRequest(RequestEvent{Method: method, Path: path, Status: status, Took: took, Attempt: attempt, Err: err})
 }
 
 func (c *Client) logf(format string, args ...any) {

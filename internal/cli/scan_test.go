@@ -145,9 +145,18 @@ func TestScanWhoseJobsWereAllSkippedExitsTwo(t *testing.T) {
 	}
 }
 
-// runScanCmd executes the command tree and returns stdout and the error, so the
-// exit code can be asserted rather than the process killed.
+// runScanCmd executes the command tree and returns what it wrote — stdout,
+// then stderr — and the error, so the exit code can be asserted rather than the
+// process killed.
 func runScanCmd(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	stdout, stderr, err := runScanSplit(t, args...)
+	return stdout + stderr, err
+}
+
+// runScanSplit is runScanCmd with the two streams kept apart, for a test that
+// parses the report: stderr carries the trace's closing line.
+func runScanSplit(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	// A config file discovered in the developer's own home directory would make
 	// these assertions depend on their machine.
@@ -156,13 +165,13 @@ func runScanCmd(t *testing.T, args ...string) (string, error) {
 	t.Setenv("JENKINS_USER", "")
 	t.Setenv("JENKINS_TOKEN", "")
 
-	var out bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	root := NewRootCommand()
-	root.SetOut(&out)
-	root.SetErr(&out)
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
 	root.SetArgs(args)
 	err := root.Execute()
-	return out.String(), err
+	return stdout.String(), stderr.String(), err
 }
 
 func TestScanReportsAHardenedController(t *testing.T) {
@@ -207,7 +216,7 @@ func TestScanRoundTripsASnapshot(t *testing.T) {
 	srv := controller(t, false)
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 
-	online, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t",
+	online, _, err := runScanSplit(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t",
 		"--snapshot-out", path, "-o", "json")
 	if err != nil {
 		t.Fatalf("scan: %v\n%s", err, online)
@@ -231,7 +240,7 @@ func TestScanRoundTripsASnapshot(t *testing.T) {
 
 	// Re-evaluating offline, with no network and no token, must produce the
 	// same verdicts — that property is what makes a snapshot worth keeping.
-	offline, err := runScanCmd(t, "scan", "--snapshot-in", path, "-o", "json")
+	offline, _, err := runScanSplit(t, "scan", "--snapshot-in", path, "-o", "json")
 	if err != nil {
 		t.Fatalf("offline scan: %v\n%s", err, offline)
 	}
@@ -581,7 +590,7 @@ func TestIncompleteSummaryNamesTheContainers(t *testing.T) {
 // resource.
 func verdicts(t *testing.T, args ...string) (map[string]string, error) {
 	t.Helper()
-	out, err := runScanCmd(t, append(args, "-o", "json")...)
+	out, _, err := runScanSplit(t, append(args, "-o", "json")...)
 	var rep struct {
 		Findings []struct {
 			CheckID  string `json:"checkId"`

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/scm-bench/jenkins-bench/internal/ci"
@@ -63,6 +64,9 @@ type Fetcher struct {
 	Concurrency int
 	// ToolVersion is recorded in the snapshot metadata.
 	ToolVersion string
+	// Progress, when set, is told after each job is read how many of how
+	// many are done. Called from the fetch goroutines.
+	Progress func(done, total int)
 
 	mu       sync.Mutex
 	warnings []string
@@ -468,6 +472,7 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 	var wg sync.WaitGroup
 	var firstErr error
 	var errOnce sync.Once
+	var done atomic.Int64
 
 	for i, it := range items {
 		wg.Add(1)
@@ -481,6 +486,9 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 				return
 			}
 			jobs[i] = job
+			if f.Progress != nil {
+				f.Progress(int(done.Add(1)), len(items))
+			}
 		}(i, it)
 	}
 	wg.Wait()

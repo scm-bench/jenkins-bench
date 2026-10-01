@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -569,7 +570,70 @@ func TestClientKeepsAConnectionPerConcurrentRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.httpClient.Transport.(*http.Transport).MaxIdleConnsPerHost; got != 8 {
+	if got := c.httpClient.Transport.(*observedTransport).base.(*http.Transport).MaxIdleConnsPerHost; got != 8 {
 		t.Errorf("MaxIdleConnsPerHost = %d, want 8", got)
+	}
+}
+
+// The scan's closing account counts at the wire: every attempt, and every
+// redirect hop the client follows, is a request that was sent.
+func TestClientReportsEveryRequestSent(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/moved":
+			http.Redirect(w, r, "/api/json", http.StatusFound)
+		case calls.Add(1) == 1:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var events []RequestEvent
+	c, _ := NewClient(Options{BaseURL: srv.URL, MaxRetries: 2, OnRequest: func(e RequestEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}})
+	if err := c.GetJSON(context.Background(), "/moved", nil); err != nil {
+		t.Fatal(err)
+	}
+	// /moved -> 302, /api/json -> 503, then the retry: /moved -> 302, /api/json -> 200.
+	if len(events) != 4 {
+		t.Fatalf("events = %+v, want each hop of each attempt", events)
+	}
+	if events[0].Status != http.StatusFound || events[1].Status != http.StatusServiceUnavailable || events[3].Status != http.StatusOK {
+		t.Errorf("statuses = %d %d %d %d", events[0].Status, events[1].Status, events[2].Status, events[3].Status)
+	}
+	if events[2].Attempt != 1 || events[3].Attempt != 1 {
+		t.Errorf("the retry's hops should carry its attempt number: %+v", events)
+	}
+}
+
+// Nothing but a read leaves the process, whatever a future caller asks of
+// the underlying client — and the attempt is still reported, so the account
+// can say so.
+func TestTransportRefusesAnythingButARead(t *testing.T) {
+	var reached atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+	}))
+	defer srv.Close()
+
+	var events []RequestEvent
+	c, _ := NewClient(Options{BaseURL: srv.URL, OnRequest: func(e RequestEvent) { events = append(events, e) }})
+	resp, err := c.httpClient.Post(srv.URL+"/job/x/build", "text/plain", strings.NewReader(""))
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("a POST went out")
+	}
+	if reached.Load() {
+		t.Error("the server received the POST")
+	}
+	if len(events) != 1 || events[0].Method != http.MethodPost || events[0].Err == nil {
+		t.Errorf("the refused POST should still be reported: %+v", events)
 	}
 }
