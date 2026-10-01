@@ -498,6 +498,15 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		}
 	}
 
+	// Part of the job tree could not be listed, so the jobs in it are absent
+	// from the report rather than judged. A warning alone is what v0.1 did,
+	// and the folder nobody could read then scored 100/100 by omission.
+	// Checked before the empty job list below: when the top level itself
+	// failed, the job list is empty too, and the listing is the cause to name.
+	if !rep.Coverage.Complete && !opts.scan.AllowIncomplete {
+		return &exitCodeError{code: ExitError, msg: incompleteSummary(rep.Coverage)}
+	}
+
 	// Nothing job-scope was audited, so no verdict below is about the jobs.
 	// The case this exists for is a token without Job/Read: the controller
 	// does not refuse it the job list, it hands it an empty one, and the
@@ -517,13 +526,6 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 			msg: "no job was evaluated: the controller listed none that this token can read, so nothing job-scope was audited\n" +
 				"a token without Job/Read is shown an empty job list rather than an error; grant it Job/Read (and Job/ExtendedRead to judge them)",
 		}
-	}
-
-	// Part of the job tree could not be listed, so the jobs in it are absent
-	// from the report rather than judged. A warning alone is what v0.1 did,
-	// and the folder nobody could read then scored 100/100 by omission.
-	if !rep.Coverage.Complete && !opts.scan.AllowIncomplete {
-		return &exitCodeError{code: ExitError, msg: incompleteSummary(rep.Coverage)}
 	}
 
 	if opts.scan.MaxManual >= 0 {

@@ -1029,3 +1029,29 @@ func TestScanChecksTheSelectionBeforeContactingTheController(t *testing.T) {
 		t.Errorf("%d requests were sent before a config error that needed none", n)
 	}
 }
+
+// When the top level itself cannot be listed, the scan has no jobs and an
+// incomplete list at once. The cause is the listing, and that is what the
+// message has to name: "this token cannot read any job" would send the
+// operator after a permission that is fine.
+func TestScanThatCouldNotListTheTopLevelSaysSo(t *testing.T) {
+	srv := controllerServing(t, false, hardenedJob, map[string]http.HandlerFunc{
+		"/api/json": func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.RawQuery, "tree=jobs") {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			fmt.Fprint(w, `{"_class":"hudson.model.Hudson","numExecutors":0,"useSecurity":true,"useCrumbs":true}`)
+		},
+	})
+	_, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color")
+	if code := ExitCode(err); code != ExitError {
+		t.Fatalf("exit %d (%v), want %d", code, err, ExitError)
+	}
+	if !strings.Contains(err.Error(), "the top level could not be listed") && !strings.Contains(err.Error(), "the top level") {
+		t.Errorf("the message should name the listing that failed: %v", err)
+	}
+	if strings.Contains(err.Error(), "listed none that this token can read") {
+		t.Errorf("the message blames a permission when the listing itself failed: %v", err)
+	}
+}
