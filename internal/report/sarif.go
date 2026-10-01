@@ -6,17 +6,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/scm-bench/jenkins-bench/internal/checks"
+	"github.com/scm-bench/jenkins-bench/internal/console"
 	"github.com/scm-bench/jenkins-bench/internal/engine"
 )
 
 // SARIF 2.1.0. Findings here are configuration facts about a controller rather
-// than lines of source, so each result carries a logicalLocation naming the
-// controller instead of a physicalLocation pointing into a file that does not
-// exist.
+// than lines of source, so each result names its job or the controller as a
+// logicalLocation — and also carries a physicalLocation, because GitHub code
+// scanning drops any result without one: the upload reports success and the
+// Security tab stays empty, which a pipeline reads as nothing to fix
+// (scm-bench/jenkins-bench#10). The artifact URI is a stable path naming the
+// controller and the resource; it need not exist in the repository the SARIF
+// is uploaded to, as OpenSSF Scorecard's do not.
 
 const (
 	sarifVersion = "2.1.0"
@@ -24,8 +30,19 @@ const (
 	// and restructured the repository. A $schema that does not resolve is not
 	// cosmetic: a validating consumer fetches it, and every report we emit
 	// carries the URL.
-	sarifSchema  = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"
-	sarifInfoURI = "https://github.com/scm-bench/jenkins-bench"
+	sarifSchema   = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"
+	sarifInfoURI  = "https://github.com/scm-bench/jenkins-bench"
+	sarifToolName = "jenkins-bench"
+
+	// maxSARIFResults is GitHub's cap on what it keeps from one run: past
+	// 5,000 it keeps the most severe 5,000, past 25,000 it rejects the file —
+	// and a 10,000-job controller produces some 30,000 results. Capping here,
+	// most severe first, makes which ones survive our choice and lets the run
+	// say how many it withheld.
+	maxSARIFResults = 5000
+
+	// manualRuleSuffix marks the rule a MANUAL result points at.
+	manualRuleSuffix = "/manual"
 )
 
 type sarifLog struct {
@@ -35,10 +52,18 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool        sarifTool         `json:"tool"`
-	Results     []sarifResult     `json:"results"`
-	Invocations []sarifInvocation `json:"invocations,omitempty"`
-	Properties  map[string]any    `json:"properties,omitempty"`
+	Tool              sarifTool              `json:"tool"`
+	AutomationDetails *sarifAutomationDetail `json:"automationDetails,omitempty"`
+	Results           []sarifResult          `json:"results"`
+	Invocations       []sarifInvocation      `json:"invocations,omitempty"`
+	Properties        map[string]any         `json:"properties,omitempty"`
+}
+
+// sarifAutomationDetail identifies the run's category. Without one, two
+// controllers uploading to the same GitHub repository share a category, and
+// each upload closes the other's alerts as fixed.
+type sarifAutomationDetail struct {
+	ID string `json:"id"`
 }
 
 type sarifTool struct {
@@ -76,8 +101,8 @@ type sarifRuleConfig struct {
 
 type sarifRuleProperty struct {
 	Tags []string `json:"tags,omitempty"`
-	// SecuritySeverity is the 0-10 numeric score consumers such as GitHub code
-	// scanning use to bucket findings.
+	// SecuritySeverity is the 0-10 numeric score GitHub code scanning takes an
+	// alert's displayed severity from. Absent on a MANUAL rule.
 	SecuritySeverity string `json:"security-severity,omitempty"`
 	Severity         string `json:"severity,omitempty"`
 	CISID            string `json:"cisId,omitempty"`
@@ -88,13 +113,32 @@ type sarifResult struct {
 	RuleID              string            `json:"ruleId"`
 	Level               string            `json:"level"`
 	Message             sarifText         `json:"message"`
-	Locations           []sarifLocation   `json:"locations,omitempty"`
+	Locations           []sarifLocation   `json:"locations"`
 	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
 	Properties          map[string]any    `json:"properties,omitempty"`
 }
 
 type sarifLocation struct {
+	PhysicalLocation sarifPhysicalLocation  `json:"physicalLocation"`
 	LogicalLocations []sarifLogicalLocation `json:"logicalLocations"`
+}
+
+type sarifPhysicalLocation struct {
+	ArtifactLocation sarifArtifactLocation `json:"artifactLocation"`
+	Region           sarifRegion           `json:"region"`
+}
+
+type sarifArtifactLocation struct {
+	URI string `json:"uri"`
+}
+
+// sarifRegion is required by GitHub alongside the artifact; a configuration
+// finding has no line, so it is the artifact's first character.
+type sarifRegion struct {
+	StartLine   int `json:"startLine"`
+	StartColumn int `json:"startColumn"`
+	EndLine     int `json:"endLine"`
+	EndColumn   int `json:"endColumn"`
 }
 
 type sarifLogicalLocation struct {
@@ -113,7 +157,14 @@ type sarifNotification struct {
 	Message sarifText `json:"message"`
 }
 
+// place is where a run's results live: the platform and the controller.
+type place struct {
+	platform string
+	host     string
+}
+
 func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
+	where := place{platform: platformOf(rep), host: controllerHost(rep.Metadata.BaseURL)}
 	rules := map[string]sarifRule{}
 	// Not `var results []sarifResult`: a nil slice marshals to null, and
 	// run.results is typed `array` in the SARIF schema. Strict validators and
@@ -122,25 +173,49 @@ func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
 	// least expects to be told their report is malformed.
 	results := []sarifResult{}
 
+	// A control no API can answer is one question for a person, however many
+	// jobs it spans: one result per control, anchored at the controller. Per
+	// job, a thousand-job controller sent thousands of identical "manual
+	// review" results toward GitHub's cap.
+	byDesign := map[string][]engine.Finding{}
+	var designOrder []string
+
 	for _, f := range rep.Findings {
-		// NA findings are noise in a CI report: the control does not apply.
-		// PASS is omitted for the same reason SARIF consumers expect only
-		// actionable results.
+		// PASS and NA are not emitted: code scanning shows alerts, and
+		// neither is one.
 		if f.Status != engine.StatusFail && f.Status != engine.StatusManual {
 			continue
 		}
-		if _, ok := rules[f.CheckID]; !ok {
-			rules[f.CheckID] = buildRule(f)
+		if f.Status == engine.StatusManual && !f.Automated {
+			if _, seen := byDesign[f.CheckID]; !seen {
+				designOrder = append(designOrder, f.CheckID)
+			}
+			byDesign[f.CheckID] = append(byDesign[f.CheckID], f)
+			continue
 		}
-		// A rule that turns out to have a real failure is escalated back to its
-		// own severity. See demoteToNote for why it starts below it.
-		if f.Status == engine.StatusFail {
-			rule := rules[f.CheckID]
-			rule.DefaultConfiguration.Level = sarifLevel(f.Severity)
-			rule.Properties.SecuritySeverity = securitySeverity(f.Severity)
-			rules[f.CheckID] = rule
+		rule := buildRule(f)
+		rules[rule.ID] = rule
+		results = append(results, buildResult(f, where))
+	}
+	for _, id := range designOrder {
+		group := byDesign[id]
+		rule := buildRule(group[0])
+		rules[rule.ID] = rule
+		results = append(results, buildAggregateResult(group, where))
+	}
+
+	// Most severe first, so the cap keeps what matters; then stable.
+	sort.SliceStable(results, func(i, j int) bool {
+		if a, b := resultRank(results[i]), resultRank(results[j]); a != b {
+			return a > b
 		}
-		results = append(results, buildResult(f))
+		return results[i].RuleID+"\x00"+results[i].Locations[0].PhysicalLocation.ArtifactLocation.URI <
+			results[j].RuleID+"\x00"+results[j].Locations[0].PhysicalLocation.ArtifactLocation.URI
+	})
+	withheld := 0
+	if len(results) > maxSARIFResults {
+		withheld = len(results) - maxSARIFResults
+		results = results[:maxSARIFResults]
 	}
 
 	ruleList := make([]sarifRule, 0, len(rules))
@@ -151,12 +226,13 @@ func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
 
 	run := sarifRun{
 		Tool: sarifTool{Driver: sarifDriver{
-			Name:           "jenkins-bench",
+			Name:           sarifToolName,
 			Version:        opts.ToolVersion,
 			InformationURI: sarifInfoURI,
 			Rules:          ruleList,
 		}},
-		Results: results,
+		AutomationDetails: &sarifAutomationDetail{ID: sarifToolName + "/" + where.host + "/"},
+		Results:           results,
 		Properties: map[string]any{
 			"score":    rep.Score.Value,
 			"passed":   rep.Score.Passed,
@@ -184,12 +260,20 @@ func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
 		}})
 	}
 	// Likewise a folder that could not be listed: its jobs are absent from
-	// the results, and absence is what a fixed alert looks like. The
-	// folders themselves are already named among the scan warnings above.
+	// the results, and absence is what a fixed alert looks like. The folders
+	// themselves are already named among the scan warnings above.
 	if !rep.Coverage.Complete {
-		notifications = append(notifications, sarifNotification{Level: "error", Message: sarifText{
-			Text: fmt.Sprintf("The job list is incomplete: %d container(s) could not be listed, and the jobs in them were not evaluated.", len(rep.Coverage.Unlisted)),
-		}})
+		text := "The snapshot does not record its job list as complete, so jobs may be missing from these results."
+		if n := len(rep.Coverage.Unlisted); n > 0 {
+			text = fmt.Sprintf("The job list is incomplete: %s could not be listed, and the jobs in them were not evaluated.",
+				console.Pluralize(n, "container"))
+		}
+		notifications = append(notifications, sarifNotification{Level: "error", Message: sarifText{Text: text}})
+	}
+	if withheld > 0 {
+		notifications = append(notifications, sarifNotification{Level: "warning", Message: sarifText{Text: fmt.Sprintf(
+			"%d less severe results were withheld to stay within code scanning's %d-result limit; -o json carries every finding",
+			withheld, maxSARIFResults)}})
 	}
 	run.Invocations = []sarifInvocation{{
 		ExecutionSuccessful:        len(rep.Errors) == 0 && !rep.Coverage.NoJobsAudited() && rep.Coverage.Complete,
@@ -204,6 +288,50 @@ func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
 	return enc.Encode(log)
 }
 
+// controllerHost is the controller's host and port, the stable part of every
+// artifact URI and of the run's category.
+func controllerHost(baseURL string) string {
+	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return engine.InstanceResourceName
+}
+
+func platformOf(rep *engine.Report) string {
+	if rep.Metadata.Platform != "" {
+		return rep.Metadata.Platform
+	}
+	return "jenkins"
+}
+
+// artifactURI names a resource as a relative path — platform, controller,
+// then the job's full name — one escaped segment each, so a folder or job
+// whose name holds a space, a slash-encoded branch or non-ASCII stays one
+// unambiguous segment.
+func artifactURI(where place, resource string) string {
+	segments := []string{url.PathEscape(where.platform), url.PathEscape(where.host)}
+	for _, part := range strings.Split(resource, "/") {
+		segments = append(segments, url.PathEscape(part))
+	}
+	return strings.Join(segments, "/")
+}
+
+// resultRank orders results for the cap: real failures by severity, then
+// everything that only needs a person.
+func resultRank(r sarifResult) int {
+	if strings.HasSuffix(r.RuleID, manualRuleSuffix) {
+		return 0
+	}
+	switch r.Level {
+	case "error":
+		return 3
+	case "warning":
+		return 2
+	default:
+		return 1
+	}
+}
+
 func buildRule(f engine.Finding) sarifRule {
 	helpURI := ""
 	if len(f.References) > 0 {
@@ -211,51 +339,52 @@ func buildRule(f engine.Finding) sarifRule {
 	}
 	// SARIF distinguishes the two: shortDescription is the label a viewer puts
 	// in a list, fullDescription is what it shows when the reader wants to know
-	// what the rule is about. Repeating the title in both, as this did before
-	// the control's description was carried on the finding, wasted the field.
+	// what the rule is about.
 	full := f.Description
 	if strings.TrimSpace(full) == "" {
 		full = f.Title
 	}
 
-	// The rule starts at note and is raised to its real severity by the caller
-	// the first time an actual failure lands on it.
-	//
-	// GitHub takes an alert's displayed severity from the rule's
-	// security-severity, not from the result's level — so a control that can
-	// only ever report MANUAL, like CIS-2.2.1 for single-use build workers,
-	// would arrive in the Security panel as a High alert saying a setting was
-	// broken, while `scan.failOn` locally did not fail on it at all. Two
-	// severities for the same finding, and the louder one wrong.
-	level, severity := "note", securitySeverity(checks.SeverityLow)
-	if f.Status == engine.StatusFail {
-		level, severity = sarifLevel(f.Severity), securitySeverity(f.Severity)
-	}
-
-	return sarifRule{
+	rule := sarifRule{
 		ID:                   f.CheckID,
 		Name:                 strings.ReplaceAll(f.CheckID, "-", ""),
 		ShortDescription:     sarifText{Text: f.Title},
 		FullDescription:      sarifText{Text: full},
 		Help:                 sarifText{Text: f.Remediation},
 		HelpURI:              helpURI,
-		DefaultConfiguration: sarifRuleConfig{Level: level},
+		DefaultConfiguration: sarifRuleConfig{Level: sarifLevel(f.Severity)},
 		Properties: sarifRuleProperty{
 			Tags:             []string{"security", "supply-chain", "cis", "build-pipelines"},
-			SecuritySeverity: severity,
+			SecuritySeverity: securitySeverity(f.Severity),
 			Severity:         strings.ToUpper(f.Severity),
 			CISID:            f.CISID,
 			Automated:        f.Automated,
 		},
 	}
+	// A MANUAL result points at a rule of its own, with no security-severity.
+	// GitHub takes an alert's displayed severity from the rule, not the
+	// result, so sharing the control's rule made "a person needs to check
+	// this" display at the control's severity — and a control that can only
+	// be MANUAL, like CIS-2.2.1, display as High on every run.
+	if f.Status == engine.StatusManual {
+		rule.ID += manualRuleSuffix
+		rule.Name += "Manual"
+		rule.ShortDescription = sarifText{Text: "Manual review: " + f.Title}
+		rule.DefaultConfiguration = sarifRuleConfig{Level: "note"}
+		rule.Properties.SecuritySeverity = ""
+		rule.Properties.Tags = append(rule.Properties.Tags, "manual-review")
+	}
+	return rule
 }
 
-func buildResult(f engine.Finding) sarifResult {
+func buildResult(f engine.Finding, where place) sarifResult {
 	level := sarifLevel(f.Severity)
+	ruleID := f.CheckID
 	if f.Status == engine.StatusManual {
 		// A control nobody could evaluate is not an assertion that something
 		// is broken, so it never escalates past a note.
 		level = "note"
+		ruleID += manualRuleSuffix
 	}
 
 	message := f.Details
@@ -267,20 +396,18 @@ func buildResult(f engine.Finding) sarifResult {
 	}
 
 	return sarifResult{
-		RuleID:  f.CheckID,
-		Level:   level,
-		Message: sarifText{Text: message},
-		Locations: []sarifLocation{{
-			LogicalLocations: []sarifLogicalLocation{{
-				Name:               f.Resource,
-				FullyQualifiedName: f.Resource,
-				Kind:               f.ResourceType,
-			}},
-		}},
+		RuleID:    ruleID,
+		Level:     level,
+		Message:   sarifText{Text: message},
+		Locations: []sarifLocation{location(where, f.Resource, f.ResourceType)},
 		// Fingerprinting on control plus resource lets a consumer track the
-		// same finding across runs even as wording changes.
+		// same finding across runs even as wording changes. GitHub reads
+		// primaryLocationLineHash, keyed on the controller too, so two
+		// controllers' findings never merge; scmBenchFindingV1 is the
+		// family's own key, unchanged.
 		PartialFingerprints: map[string]string{
-			"scmBenchFindingV1": fingerprint(f.CheckID, f.Resource),
+			"primaryLocationLineHash": fingerprint(where.host, f.CheckID, f.Resource) + ":1",
+			"scmBenchFindingV1":       fingerprint(f.CheckID, f.Resource),
 		},
 		Properties: map[string]any{
 			"status":       string(f.Status),
@@ -288,6 +415,38 @@ func buildResult(f engine.Finding) sarifResult {
 			"cisId":        f.CISID,
 			"resourceType": f.ResourceType,
 		},
+	}
+}
+
+// buildAggregateResult is the one result for a control no API can answer,
+// naming how many resources it covers and anchored at the controller.
+func buildAggregateResult(group []engine.Finding, where place) sarifResult {
+	f := group[0]
+	anchor := f
+	anchor.Resource = engine.InstanceResourceName
+	anchor.ResourceType = engine.ResourceController
+	result := buildResult(anchor, where)
+	if len(group) > 1 || f.ResourceType != engine.ResourceController {
+		result.Message.Text = fmt.Sprintf("Manual review required for %s: %s", console.Pluralize(len(group), f.ResourceType), f.Details)
+		if fix := f.Remediation; fix != "" {
+			result.Message.Text += "\n\nRemediation: " + fix
+		}
+	}
+	result.Properties["resources"] = len(group)
+	return result
+}
+
+func location(where place, resource, kind string) sarifLocation {
+	return sarifLocation{
+		PhysicalLocation: sarifPhysicalLocation{
+			ArtifactLocation: sarifArtifactLocation{URI: artifactURI(where, resource)},
+			Region:           sarifRegion{StartLine: 1, StartColumn: 1, EndLine: 1, EndColumn: 1},
+		},
+		LogicalLocations: []sarifLogicalLocation{{
+			Name:               resource,
+			FullyQualifiedName: resource,
+			Kind:               kind,
+		}},
 	}
 }
 
@@ -309,7 +468,7 @@ func securitySeverity(severity string) string {
 	case checks.SeverityMedium:
 		return "5.0"
 	default:
-		return "3.0"
+		return "2.0"
 	}
 }
 
