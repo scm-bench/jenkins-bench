@@ -82,7 +82,7 @@ func controllerServing(t *testing.T, anonymousAllowed bool, jobs string, extra m
 		case "/credentials/api/json":
 			fmt.Fprint(w, `{"stores":{"system":{"domains":{"_":{"credentials":[]}}}}}`)
 		case "/job/app/api/json":
-			fmt.Fprint(w, `{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","fullName":"app","disabled":false,"buildable":true}`)
+			fmt.Fprint(w, `{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"app","fullName":"app","disabled":false,"buildable":true}`)
 		case "/job/app/config.xml":
 			fmt.Fprint(w, `<?xml version='1.1' encoding='UTF-8'?><flow-definition>
 				<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition>
@@ -901,5 +901,39 @@ func TestScanJudgesGroovyOutsideThePipelineDefinition(t *testing.T) {
 	}
 	if got["CIS-2.1.2 walled"] != "PASS" {
 		t.Errorf("CIS-2.1.2 walled = %q, want PASS: the job's only script is sandboxed", got["CIS-2.1.2 walled"])
+	}
+}
+
+// A scoping flag that names nothing on the controller stops the scan with exit
+// 2 and the name; the family's rule is never to scan zero things silently.
+func TestScanWithAnUnknownTargetExitsTwo(t *testing.T) {
+	srv := controller(t, false)
+	_, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--folder", "no-such-folder")
+	if code := ExitCode(err); code != ExitError {
+		t.Fatalf("exit code = %d (%v), want %d", code, err, ExitError)
+	}
+	if !strings.Contains(err.Error(), "no-such-folder") {
+		t.Errorf("the error should name the target: %v", err)
+	}
+
+	got, err := verdicts(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--job", "app")
+	if err != nil {
+		t.Fatalf("--job app: %v", err)
+	}
+	if got["CIS-2.3.1 app"] != "PASS" {
+		t.Errorf("--job app should scan app: %v", got)
+	}
+}
+
+func TestScopingFlagsAreRefusedWithASnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","metadata":{"platform":"jenkins"},"controller":{"available":{"jobs":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--folder", "--job"} {
+		_, err := runScanCmd(t, "scan", "--snapshot-in", path, flag, "platform")
+		if err == nil || !strings.Contains(err.Error(), "--snapshot-in") {
+			t.Errorf("%s with --snapshot-in should be refused, saying why: %v", flag, err)
+		}
 	}
 }

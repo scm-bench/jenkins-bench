@@ -67,12 +67,21 @@ type Fetcher struct {
 	// Progress, when set, is told after each job is read how many of how
 	// many are done. Called from the fetch goroutines.
 	Progress func(done, total int)
+	// Folders and Jobs narrow the scan to the items named, by full name;
+	// both empty means the whole controller. They add up: a folder brings
+	// every job under it at any depth, a job brings itself. A name the
+	// controller does not know is an error, never an empty scan.
+	Folders []string
+	Jobs    []string
 
 	mu       sync.Mutex
 	warnings []string
 	// unlisted collects the containers whose listing failed, for
 	// Controller.Unlisted.
 	unlisted []string
+	// listed is every container walked, so overlapping --folder targets are
+	// listed once.
+	listed map[string]bool
 }
 
 // NewFetcher returns a fetcher reading through c.
@@ -363,6 +372,13 @@ const maxFolderDepth = 64
 // container is the folder's full name, "" for the top level; depth is how many
 // folders deep it is.
 func (f *Fetcher) listJobs(ctx context.Context, container string, depth int, out *[]item) error {
+	if f.listed[container] {
+		return nil
+	}
+	if f.listed == nil {
+		f.listed = map[string]bool{}
+	}
+	f.listed[container] = true
 	var listing jobListing
 	prefix := ""
 	if container != "" {
@@ -452,8 +468,8 @@ func describeContainer(container string) string {
 }
 
 func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]ci.Job, error) {
-	var items []item
-	if err := f.listJobs(ctx, "", 0, &items); err != nil {
+	items, err := f.enumerate(ctx)
+	if err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -509,6 +525,75 @@ func addLabel(n *ci.BuiltInNode, name string) {
 		}
 	}
 	n.Labels = append(n.Labels, name)
+}
+
+// enumerate finds the jobs in scope: the whole tree, or what --folder and
+// --job name.
+func (f *Fetcher) enumerate(ctx context.Context) ([]item, error) {
+	var items []item
+	if len(f.Folders) == 0 && len(f.Jobs) == 0 {
+		err := f.listJobs(ctx, "", 0, &items)
+		return items, err
+	}
+	for _, raw := range f.Folders {
+		name := strings.Trim(strings.TrimSpace(raw), "/")
+		target, err := f.lookup(ctx, "--folder", name)
+		if err != nil {
+			return nil, err
+		}
+		if !isContainer(target) {
+			return nil, fmt.Errorf("--folder %q names a job, not a folder; name it with --job", name)
+		}
+		if err := f.listJobs(ctx, name, strings.Count(name, "/")+1, &items); err != nil {
+			return nil, err
+		}
+	}
+	for _, raw := range f.Jobs {
+		name := strings.Trim(strings.TrimSpace(raw), "/")
+		target, err := f.lookup(ctx, "--job", name)
+		if err != nil {
+			return nil, err
+		}
+		if isContainer(target) {
+			return nil, fmt.Errorf("--job %q names a folder, not a job; name it with --folder", name)
+		}
+		items = append(items, target)
+	}
+	// A job named twice — once under a --folder, once by --job — is one job.
+	seen := map[string]bool{}
+	unique := items[:0]
+	for _, it := range items {
+		if !seen[it.FullName] {
+			seen[it.FullName] = true
+			unique = append(unique, it)
+		}
+	}
+	return unique, nil
+}
+
+// lookup reads the one item a scoping flag names. Jenkins answers 404 both
+// for an item that does not exist and for one this token may not see, and
+// either way the scan the flag asked for cannot happen: it is an error naming
+// the target, never a scan of nothing that exits 0.
+func (f *Fetcher) lookup(ctx context.Context, flag, name string) (item, error) {
+	if name == "" {
+		return item{}, fmt.Errorf("%s needs a full name, e.g. %s platform/api-service", flag, flag)
+	}
+	var it item
+	err := f.client.GetJSON(ctx, jobPath(name)+"/api/json?tree="+itemTree, &it)
+	switch {
+	case err == nil:
+		if it.FullName == "" {
+			it.FullName = name
+		}
+		return it, nil
+	case ctx.Err() != nil:
+		return item{}, ctx.Err()
+	case Status(err) == http.StatusNotFound:
+		return item{}, fmt.Errorf("%s %q: the controller has no such item, or this token cannot see it", flag, name)
+	default:
+		return item{}, fmt.Errorf("%s %q could not be read: %w", flag, name, err)
+	}
 }
 
 // builtInNodeLabels is every label that means "the controller": the well-known

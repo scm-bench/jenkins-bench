@@ -1271,3 +1271,103 @@ func TestRunsOnBuiltInNodeNeedsTheNodesLabels(t *testing.T) {
 		t.Errorf("runs=%v known=%v; built-in is the controller", runs, known)
 	}
 }
+
+// scopedStand is a controller with a top-level job, a folder holding a job and
+// a subfolder, and a multibranch project.
+func scopedStand(t *testing.T) *stand {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"_class":"hudson.model.Hudson","useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"Team A","fullName":"Team A","url":"http://x/","jobs":[{}]}]}`}
+	folder := `{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"Team A","fullName":"Team A","jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"deploy","fullName":"Team A/deploy","url":"http://x/"},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"sub","fullName":"Team A/sub","url":"http://x/","jobs":[{}]},
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"Team A/mb","url":"http://x/","jobs":[{}]}]}`
+	s.handlers["/job/Team A/api/json"] = standResponse{body: folder}
+	s.handlers["/job/Team A/job/sub/api/json"] = standResponse{body: `{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"sub","fullName":"Team A/sub","jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"deep","fullName":"Team A/sub/deep","url":"http://x/"}]}`}
+	s.handlers["/job/Team A/job/deploy/api/json"] = standResponse{body: `{"_class":"hudson.model.FreeStyleProject","name":"deploy","fullName":"Team A/deploy","url":"http://x/"}`}
+	s.handlers["/job/Team A/job/mb/api/json"] = standResponse{body: `{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"Team A/mb","jobs":[{}]}`}
+	s.handlers["/job/Team A/job/sub/job/deep/api/json"] = standResponse{body: `{"_class":"hudson.model.FreeStyleProject","name":"deep","fullName":"Team A/sub/deep","url":"http://x/"}`}
+	return s
+}
+
+func scopedFetch(t *testing.T, s *stand, folders, jobs []string) (*ci.Snapshot, error) {
+	t.Helper()
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewFetcher(client)
+	f.Folders, f.Jobs = folders, jobs
+	return f.Fetch(context.Background())
+}
+
+func jobNames(snap *ci.Snapshot) string {
+	var names []string
+	for _, j := range snap.Jobs {
+		names = append(names, j.FullName)
+	}
+	return strings.Join(names, ",")
+}
+
+// --folder brings everything under the folder, at any depth, and nothing
+// else; --job brings one job; together they add up, each job once.
+func TestFetcherNarrowsToTheFoldersAndJobsNamed(t *testing.T) {
+	snap, err := scopedFetch(t, scopedStand(t), []string{"Team A"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jobNames(snap); got != "Team A/deploy,Team A/mb,Team A/sub/deep" {
+		t.Errorf("--folder 'Team A' = %s", got)
+	}
+	if !snap.Controller.Available[AvailJobs] {
+		t.Error("everything in scope was listed")
+	}
+
+	snap, err = scopedFetch(t, scopedStand(t), []string{"Team A/sub", "/Team A/sub/"}, []string{"build", "Team A/sub/deep", "Team A/mb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jobNames(snap); got != "Team A/mb,Team A/sub/deep,build" {
+		t.Errorf("folders and jobs together = %s, want each job once", got)
+	}
+}
+
+// A name the controller does not know is an error naming it — the scan the
+// flag asked for cannot happen, and an empty report would read as a clean one.
+func TestFetcherRefusesATargetItCannotFind(t *testing.T) {
+	cases := []struct {
+		folders, jobs []string
+		want          string
+	}{
+		{[]string{"no-such"}, nil, `--folder "no-such": the controller has no such item`},
+		{nil, []string{"Team A/no-such"}, `--job "Team A/no-such": the controller has no such item`},
+		{[]string{"build"}, nil, `--folder "build" names a job`},
+		{nil, []string{"Team A"}, `--job "Team A" names a folder`},
+		{[]string{" / "}, nil, `--folder needs a full name`},
+	}
+	for _, tc := range cases {
+		_, err := scopedFetch(t, scopedStand(t), tc.folders, tc.jobs)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("folders=%v jobs=%v: error = %v, want %q", tc.folders, tc.jobs, err, tc.want)
+		}
+	}
+}
+
+// A multibranch project is a job to the scan, and can be named as one.
+func TestFetcherTakesAMultibranchProjectAsAJob(t *testing.T) {
+	snap, err := scopedFetch(t, scopedStand(t), nil, []string{"Team A/mb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jobNames(snap); got != "Team A/mb" {
+		t.Errorf("--job 'Team A/mb' = %s", got)
+	}
+	if _, err := scopedFetch(t, scopedStand(t), []string{"Team A/mb"}, nil); err == nil {
+		t.Error("--folder on a multibranch project should say to use --job")
+	}
+}

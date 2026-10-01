@@ -25,6 +25,9 @@ type scanOptions struct {
 	username string
 	token    string
 
+	folders []string
+	jobs    []string
+
 	configPath  string
 	sets        []string
 	snapshotIn  string
@@ -72,6 +75,11 @@ Credentials may be supplied by flag or environment:
 Use an API token rather than a password — Manage Jenkins -> People -> <user> ->
 Security -> API Token.
 
+--folder and --job narrow the scan to the items named, by full name, and add
+up: a folder brings every job under it at any depth, a job brings itself. A
+name the controller does not know — or will not show this token — stops the
+scan with exit 2 rather than reporting on nothing.
+
 --snapshot-out writes the captured snapshot; --snapshot-in evaluates one
 already captured, with no network and no token, which is how a scan run on a
 runner that holds the credentials gets re-examined later.
@@ -97,6 +105,9 @@ token that can read very little is the common case.`,
 	f.StringVar(&opts.baseURL, "url", "", "controller URL (or JENKINS_URL)")
 	f.StringVar(&opts.username, "username", "", "user the API token belongs to (or JENKINS_USER)")
 	f.StringVar(&opts.token, "token", "", "API token (or JENKINS_TOKEN)")
+	// StringArray, not StringSlice: a Jenkins job name may hold a comma.
+	f.StringArrayVar(&opts.folders, "folder", nil, "scan only the jobs under this folder, by full name (e.g. platform/backend); repeatable")
+	f.StringArrayVar(&opts.jobs, "job", nil, "scan only this job, by full name (e.g. platform/api-service); repeatable")
 	f.StringVarP(&opts.configPath, "config", "c", "", "path to a configuration file; found automatically as ./jenkins-bench.yaml or in the user config directory")
 	f.StringArrayVar(&opts.sets, "set", nil, "override a config key, e.g. --set scan.failOn=none")
 	f.StringVar(&opts.snapshotIn, "snapshot-in", "", "evaluate a snapshot from disk instead of scanning")
@@ -160,6 +171,13 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 
 	if err := resolveFormat(cmd, opts); err != nil {
 		return err
+	}
+	// Refused rather than ignored: a snapshot already holds a fixed set of
+	// jobs, and a report of all of them that looked like the narrowed scan
+	// asked for would be the wrong answer to the question typed.
+	if opts.snapshotIn != "" && (len(opts.folders) > 0 || len(opts.jobs) > 0) {
+		return fmt.Errorf("--folder and --job narrow what is fetched from a controller, so they cannot be combined with --snapshot-in\n" +
+			"the snapshot already holds a fixed set of jobs; capture it again with --folder or --job to narrow it")
 	}
 	// Refused rather than ignored: the overview has no per-resource sections
 	// to cap, and a flag that silently does nothing reads as one that worked.
@@ -372,6 +390,8 @@ func obtainSnapshot(ctx context.Context, stderr io.Writer, colour bool, opts *sc
 	fetcher := jenkins.NewFetcher(client)
 	fetcher.ToolVersion = Version
 	fetcher.Progress = progress.jobsRead
+	fetcher.Folders = opts.folders
+	fetcher.Jobs = opts.jobs
 	if cfg.Scan.Concurrency > 0 {
 		fetcher.Concurrency = cfg.Scan.Concurrency
 	}

@@ -37,7 +37,10 @@ const (
 	// jobs[_class]{0,1} asks each item for at most one child: enough to tell
 	// an item that holds others from one that does not, at the cost of one
 	// small object per folder.
-	listingTree = "jobs[_class,name,fullName,url,disabled,buildable,jobs[_class]{0,1}]"
+	listingTree = "jobs[" + itemTree + "]"
+	// itemTree is one item's fields, as a listing reports them and as a
+	// scoping flag's target is read on its own.
+	itemTree = "_class,name,fullName,url,disabled,buildable,jobs[_class]{0,1}"
 )
 
 // item is one entry in a job listing. A folder is an item too.
