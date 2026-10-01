@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,7 @@ type scanOptions struct {
 
 	format         string
 	legacyFormat   string
+	outputFile     string
 	details        string
 	detailsSet     bool
 	showPassed     bool
@@ -99,6 +101,7 @@ token that can read very little is the common case.`,
 	// does not break on upgrade, hidden so nobody new learns it, and named as
 	// deprecated on stderr whenever it is used.
 	f.StringVar(&opts.legacyFormat, "format", "", "deprecated: use -o/--output")
+	f.StringVar(&opts.outputFile, "output-file", "", "write the report to this file (mode 0600) instead of stdout")
 	_ = f.MarkHidden("format")
 	// The default table is an overview aggregated by control, so one
 	// misconfiguration across fifty jobs reads as the single thing it is.
@@ -190,17 +193,33 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		return err
 	}
 
+	// Rendered into memory first, so a report that fails half-way never
+	// leaves half a report behind — on stdout or in a file.
 	out := cmd.OutOrStdout()
+	toTerminal := opts.outputFile == "" && isTerminal(out)
 	renderOpts := report.Options{
 		Format:         opts.format,
-		Color:          !opts.noColor && isTerminal(out) && !hasNoColorEnv(),
+		Color:          toTerminal && !opts.noColor && !hasNoColorEnv(),
 		ShowPassed:     opts.showPassed,
 		NoRemediations: opts.noRemediations,
 		Details:        cmd.Flags().Changed("details"),
 		DetailFilters:  splitFilters(opts.details),
 		ToolVersion:    Version,
 	}
-	if err := report.Write(out, rep, renderOpts); err != nil {
+	if opts.outputFile == "" {
+		renderOpts.Width = console.WidthFor(out)
+	}
+	var rendered bytes.Buffer
+	if err := report.Write(&rendered, rep, renderOpts); err != nil {
+		return err
+	}
+	if opts.outputFile != "" {
+		// 0600 and atomic, like the snapshot: the report is the same map of
+		// the controller's weak points, rendered.
+		if err := writePrivate(opts.outputFile, rendered.Bytes()); err != nil {
+			return err
+		}
+	} else if _, err := out.Write(rendered.Bytes()); err != nil {
 		return err
 	}
 
@@ -352,7 +371,7 @@ func readSnapshot(path string) (*ci.Snapshot, error) {
 	return &snapshot, nil
 }
 
-// writeSnapshot writes the snapshot with 0600 permissions.
+// writeSnapshot writes the snapshot with 0600 permissions, atomically.
 //
 // It holds no secrets by construction — see internal/ci — but it is a complete
 // map of a controller's weak points, and that is worth keeping to the user who
@@ -362,11 +381,7 @@ func writeSnapshot(path string, snapshot *ci.Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode snapshot: %w", err)
 	}
-	body = append(body, '\n')
-	if err := os.WriteFile(path, body, 0o600); err != nil {
-		return fmt.Errorf("write snapshot %s: %w", path, err)
-	}
-	return nil
+	return writePrivate(path, append(body, '\n'))
 }
 
 func firstNonEmpty(values ...string) string {

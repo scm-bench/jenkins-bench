@@ -804,3 +804,34 @@ func TestOutputFlagAndItsDeprecatedAlias(t *testing.T) {
 		t.Errorf("the deprecated alias should be hidden from --help:\n%s", help)
 	}
 }
+
+// os.WriteFile applies its mode only when it creates the file, so a snapshot
+// written over an existing 0644 one stayed world-readable — a map of a
+// controller's weak points, readable by every account on the runner.
+func TestSnapshotOutTightensAnExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("NTFS has no POSIX permission bits")
+	}
+	srv := controller(t, false)
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--snapshot-out", path, "-o", "json"); err != nil {
+		t.Fatalf("scan: %v\n%s", err, out)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("snapshot permissions = %o after overwriting a 0644 file, want 600", perm)
+	}
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), `"schemaVersion"`) {
+		t.Errorf("the stale file was not replaced:\n%s", body)
+	}
+}
