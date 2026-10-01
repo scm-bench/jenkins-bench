@@ -36,6 +36,12 @@ scan:
   timeout: 30s
   maxDuration: 0s
 
+  # A controller whose certificate comes from an internal CA: name a PEM bundle
+  # holding that CA, trusted in addition to the system's. This is the setting
+  # an enterprise controller needs — not insecure, which stops checking who
+  # answered at all. A proxy is taken from HTTPS_PROXY and NO_PROXY.
+  #caFile: /etc/ssl/certs/corp-root-ca.pem
+
   # Weakening transport security is a decision written into a file someone can
   # review, not a habit of the fingers. allowPlaintext is not needed for
   # localhost, which is already permitted.

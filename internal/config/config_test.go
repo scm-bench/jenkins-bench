@@ -173,3 +173,17 @@ func marshalForPolicy(c Config) (string, error) {
 	body, err := json.Marshal(c)
 	return string(body), err
 }
+
+// A CA bundle verifies the controller's certificate; insecure skips the check
+// and would quietly make the bundle meaningless.
+func TestCAFileAndInsecureAreExclusive(t *testing.T) {
+	cfg := Default()
+	cfg.Scan.CAFile = "/etc/ssl/corp.pem"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("caFile alone is valid: %v", err)
+	}
+	cfg.Scan.Insecure = true
+	if err := cfg.Validate(); err == nil {
+		t.Error("caFile with insecure should be refused")
+	}
+}

@@ -937,3 +937,12 @@ func TestScopingFlagsAreRefusedWithASnapshot(t *testing.T) {
 		}
 	}
 }
+
+// A CA bundle that cannot be used stops the scan before its first request.
+func TestScanRefusesAnUnusableCAFile(t *testing.T) {
+	_, err := runScanCmd(t, "scan", "--url", "https://jenkins.invalid", "--username", "u", "--token", "t",
+		"--set", "scan.caFile="+filepath.Join(t.TempDir(), "missing.pem"))
+	if code := ExitCode(err); code != ExitError || !strings.Contains(err.Error(), "scan.caFile") {
+		t.Errorf("exit %d (%v); a missing CA bundle should stop the scan, naming scan.caFile", code, err)
+	}
+}

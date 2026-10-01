@@ -5,6 +5,8 @@ package jenkins
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +64,9 @@ type Options struct {
 	// Concurrency is how many requests the caller keeps in flight, so that
 	// many connections stay open between them.
 	Concurrency int
+	// CAFile is a PEM bundle of certificate authorities trusted in addition
+	// to the system pool.
+	CAFile string
 	// Insecure disables certificate verification.
 	Insecure bool
 	// AllowPlaintext permits sending credentials over http:// to a non-loopback
@@ -99,7 +104,16 @@ func NewClient(opts Options) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	// The clone keeps http.ProxyFromEnvironment, so HTTPS_PROXY and NO_PROXY
+	// are honoured as they are by every other Go tool.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if opts.CAFile != "" {
+		tlsConfig, err := tlsWithCAFile(opts.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = tlsConfig
+	}
 	if opts.Insecure {
 		transport.TLSClientConfig = tlsInsecureConfig()
 	}
@@ -343,11 +357,17 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
-			// Nor is a redirect this client refused to follow: the next
-			// attempt would be refused the same way.
+			// Nor is a redirect this client refused to follow, or a
+			// certificate nobody vouches for: the next attempt meets the
+			// same answer, and the backoff only made a misconfiguration take
+			// seconds longer to report.
 			var refused *redirectError
 			if errors.As(err, &refused) {
 				return nil, nil, refused
+			}
+			if certificateError(err) {
+				return nil, nil, fmt.Errorf("GET %s: %w\n"+
+					"if the controller's certificate comes from an internal CA, name a bundle holding it with scan.caFile", path, err)
 			}
 			lastErr = fmt.Errorf("GET %s: %w", path, err)
 			continue
@@ -407,6 +427,19 @@ func (c *Client) warnf(format string, args ...any) {
 	if c.Warnf != nil {
 		c.Warnf(format, args...)
 	}
+}
+
+// certificateError reports whether err is the TLS handshake refusing the
+// controller's certificate.
+func certificateError(err error) bool {
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var verification *tls.CertificateVerificationError
+	return errors.As(err, &unknownAuthority) ||
+		errors.As(err, &hostname) ||
+		errors.As(err, &invalid) ||
+		errors.As(err, &verification)
 }
 
 // maxBody caps one response. Every endpoint is asked for a handful of fields

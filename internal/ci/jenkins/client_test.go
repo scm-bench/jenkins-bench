@@ -2,9 +2,12 @@ package jenkins
 
 import (
 	"context"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -635,5 +638,63 @@ func TestTransportRefusesAnythingButARead(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Method != http.MethodPost || events[0].Err == nil {
 		t.Errorf("the refused POST should still be reported: %+v", events)
+	}
+}
+
+// writeCA writes the TLS stand-in's certificate as a PEM bundle.
+func writeCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(path, block, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A controller behind an internal CA had one option, scan.insecure, which
+// stops checking who answered at all. scan.caFile trusts a bundle on top of the
+// system pool, and the certificate is still verified.
+func TestClientTrustsAnInternalCA(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Options{BaseURL: srv.URL, CAFile: writeCA(t, srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.GetJSON(context.Background(), "/api/json", nil); err != nil {
+		t.Fatalf("a certificate from the bundle's CA should verify: %v", err)
+	}
+
+	// Without the bundle the certificate is refused — once, not after a
+	// round of retries, and with directions.
+	attempts.Store(0)
+	c, _ = NewClient(Options{BaseURL: srv.URL, MaxRetries: 3})
+	err = c.GetJSON(context.Background(), "/api/json", nil)
+	if err == nil || !strings.Contains(err.Error(), "scan.caFile") {
+		t.Fatalf("an unknown authority should be an error naming scan.caFile: %v", err)
+	}
+	if n := attempts.Load(); n > 0 {
+		t.Errorf("the handshake failed, so no request reached the server; got %d", n)
+	}
+}
+
+func TestCAFileIsValidatedAtStartup(t *testing.T) {
+	if _, err := NewClient(Options{BaseURL: "https://jenkins.example.com", CAFile: filepath.Join(t.TempDir(), "missing.pem")}); err == nil ||
+		!strings.Contains(err.Error(), "scan.caFile") {
+		t.Errorf("a missing bundle should be a configuration error: %v", err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.pem")
+	if err := os.WriteFile(empty, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient(Options{BaseURL: "https://jenkins.example.com", CAFile: empty}); err == nil ||
+		!strings.Contains(err.Error(), "no PEM certificate") {
+		t.Errorf("a bundle with no certificate should be refused: %v", err)
 	}
 }

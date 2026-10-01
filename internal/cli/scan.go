@@ -370,6 +370,7 @@ func obtainSnapshot(ctx context.Context, stderr io.Writer, colour bool, opts *sc
 		Timeout:        cfg.Scan.Timeout.Get(),
 		MaxRetries:     2,
 		Concurrency:    cfg.Scan.Concurrency,
+		CAFile:         cfg.Scan.CAFile,
 		Insecure:       cfg.Scan.Insecure,
 		AllowPlaintext: cfg.Scan.AllowPlaintext,
 		Warnf: func(format string, args ...any) {
