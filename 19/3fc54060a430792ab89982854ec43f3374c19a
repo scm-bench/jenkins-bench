@@ -1,0 +1,27 @@
+examples/snapshot.json
+  s_48d8fa1c49bfb6::t_a801cee3ff3820 2
+internal/ci/snapshot.go
+  s_48d8fa1c49bfb6::t_9a92349e89c80e 12-24
+internal/cli/scan.go
+  s_48d8fa1c49bfb6::t_544e8ac19b79dc 427-431
+internal/cli/scan_test.go
+  s_48d8fa1c49bfb6::t_ea3317bf959575 133,283,311,332,361,565,744,780,852,930,949-968
+internal/cli/trace_test.go
+  s_48d8fa1c49bfb6::t_70fa3ed1e64e74 152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "193fc54060a430792ab89982854ec43f3374c19a",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "unknown"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
