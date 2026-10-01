@@ -125,7 +125,10 @@ type credentialStore struct {
 }
 
 type credentialDomain struct {
-	Credentials []credential `json:"credentials"`
+	// A pointer, because both ways of asking at too low a depth leave the key
+	// out of the domain object rather than empty — the one difference between
+	// "not read" and "none" this endpoint offers.
+	Credentials *[]credential `json:"credentials"`
 }
 
 // credential omits displayName on purpose. Jenkins masks the secret in it —

@@ -258,18 +258,48 @@ func TestFetcherRecordsWhatItCouldNotRead(t *testing.T) {
 	}
 }
 
-// An empty credential list is only trustworthy when something proves the token
-// would have been shown a store. Reading /pluginManager needs
-// Overall/Administer, so succeeding at it is that proof.
-func TestFetcherTrustsAnEmptyCredentialListWithAdministratorAccess(t *testing.T) {
+// Reading the plugin list was taken as proof of Overall/Administer, and so of
+// a credential list that had to be complete. It needs only Overall/SystemRead
+// — and an account holding that, on 2.580.1, was shown {"stores":{}} by a
+// controller with two system credentials. An empty store list proves nothing,
+// whatever else the token can read.
+func TestFetcherNeverTrustsAnEmptyStoreList(t *testing.T) {
 	s := hardened(t)
 	s.handlers["/credentials/api/json"] = standResponse{body: `{"stores":{}}`}
 	snap := fetchFrom(t, s)
-	if !snap.Controller.Available[AvailCredentials] {
-		t.Error("with the plugin list readable, an empty store list is genuinely empty")
+	if !snap.Controller.Available[AvailPlugins] {
+		t.Fatal("the stand-in serves the plugin list")
 	}
-	if len(snap.Controller.Credentials) != 0 {
-		t.Error("no credentials should have been recorded")
+	if snap.Controller.Available[AvailCredentials] {
+		t.Error("an empty store list was taken as an empty credential set")
+	}
+}
+
+// What an administrator sees on a controller with no credentials: the system
+// store, present and empty. That is a genuine zero.
+func TestFetcherTrustsAStoreThatIsPresentAndEmpty(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/credentials/api/json"] = standResponse{body: `{"stores":{"system":{"domains":{"_":{"credentials":[]}}}}}`}
+	snap := fetchFrom(t, s)
+	if !snap.Controller.Available[AvailCredentials] || len(snap.Controller.Credentials) != 0 {
+		t.Errorf("available = %v, credentials = %v", snap.Controller.Available[AvailCredentials], snap.Controller.Credentials)
+	}
+}
+
+// Both ways of asking at too low a depth fail silently: the credentials key
+// absent from the domain, or credentials that are all empty objects. Either is
+// an unread list, not an empty one.
+func TestFetcherDoesNotCountCredentialsItCouldNotRead(t *testing.T) {
+	for name, body := range map[string]string{
+		"credentials key absent":   `{"stores":{"system":{"domains":{"_":{"_class":"com.cloudbees.plugins.credentials.CredentialsStoreAction$DomainWrapper"}}}}}`,
+		"empty credential objects": `{"stores":{"system":{"domains":{"_":{"credentials":[{},{}]}}}}}`,
+	} {
+		s := hardened(t)
+		s.handlers["/credentials/api/json"] = standResponse{body: body}
+		snap := fetchFrom(t, s)
+		if snap.Controller.Available[AvailCredentials] {
+			t.Errorf("%s: the credential list was not read, and must not be available", name)
+		}
 	}
 }
 

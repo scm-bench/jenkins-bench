@@ -46,10 +46,13 @@ type Metadata struct {
 type Controller struct {
 	// Version comes from the X-Jenkins response header, which is returned
 	// without credentials — so it is known even when nothing else is.
-	Version     string          `json:"version,omitempty"`
-	Security    Security        `json:"security"`
-	BuiltInNode BuiltInNode     `json:"builtInNode"`
-	Agents      []Agent         `json:"agents,omitempty"`
+	Version     string      `json:"version,omitempty"`
+	Security    Security    `json:"security"`
+	BuiltInNode BuiltInNode `json:"builtInNode"`
+	Agents      []Agent     `json:"agents,omitempty"`
+	// Credentials are the controller's own stores — the system store and any
+	// other the root credentials page lists. Folder stores are not read, so a
+	// credential defined in a folder is not here.
 	Credentials []Credential    `json:"credentials,omitempty"`
 	Plugins     []Plugin        `json:"plugins,omitempty"`
 	UpdateSite  UpdateSite      `json:"updateSite"`

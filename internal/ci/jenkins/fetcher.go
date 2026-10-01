@@ -269,10 +269,15 @@ func (f *Fetcher) fetchUpdateSite(ctx context.Context, c *ci.Controller) {
 	}
 }
 
-// fetchCredentials reads credential metadata. Availability cannot come from
-// the HTTP status: an unauthorised read returns 200 with {"stores":{}}. It is
-// earned instead — a store came back, or the plugin list read succeeded, which
-// needs Overall/Administer and so proves any existing store would have shown.
+// fetchCredentials reads credential metadata from the controller's own stores.
+// Folder stores are not read.
+//
+// Availability cannot come from the HTTP status: an unauthorised read returns
+// 200 with {"stores":{}}. It is earned from the body instead — at least one
+// store came back, and every domain in it carried its credentials list. v0.1
+// also took a readable plugin list as proof, on the belief that it needs
+// Overall/Administer; it needs only Overall/SystemRead, and an account holding
+// that was shown {"stores":{}} by a 2.580.1 controller with two credentials.
 func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 	var root credentialsRoot
 	if err := f.client.GetJSON(ctx, "/credentials/api/json?depth=3", &root); err != nil {
@@ -281,6 +286,7 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 		return
 	}
 
+	complete := true
 	storeNames := make([]string, 0, len(root.Stores))
 	for name := range root.Stores {
 		storeNames = append(storeNames, name)
@@ -295,7 +301,18 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 		}
 		sort.Strings(domainNames)
 		for _, domainName := range domainNames {
-			for _, cred := range store.Domains[domainName].Credentials {
+			listed := store.Domains[domainName].Credentials
+			if listed == nil {
+				complete = false
+				continue
+			}
+			for _, cred := range *listed {
+				if cred.ID == "" {
+					// depth=2's failure mode: the right number of
+					// elements, every one of them empty.
+					complete = false
+					continue
+				}
 				c.Credentials = append(c.Credentials, ci.Credential{
 					ID:          cred.ID,
 					Type:        cred.TypeName,
@@ -307,11 +324,13 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 		}
 	}
 
-	sawAStore := len(root.Stores) > 0
-	c.Available[AvailCredentials] = sawAStore || c.Available[AvailPlugins]
-	if !c.Available[AvailCredentials] {
+	c.Available[AvailCredentials] = len(root.Stores) > 0 && complete
+	switch {
+	case len(root.Stores) == 0:
 		c.Errors = append(c.Errors, "no credential store was visible to this token, which is indistinguishable from a controller that has none")
 		f.warn("credential stores were not visible to this token; credential checks will report MANUAL")
+	case !complete:
+		c.Errors = append(c.Errors, "a credential store came back without its credentials listed, so the set read is not the whole of it")
 	}
 }
 
