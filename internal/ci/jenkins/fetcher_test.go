@@ -1028,3 +1028,60 @@ func TestFetcherWalksAnyItemThatHoldsJobs(t *testing.T) {
 		t.Error("every container was listed")
 	}
 }
+
+// configFor fetches one freestyle-classed job whose config.xml is body.
+func configFor(t *testing.T, body string) ci.Job {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/job/build/config.xml"] = standResponse{body: body}
+	return fetchFrom(t, s).Jobs[0]
+}
+
+// A proxy's sign-in interstitial, served at the config.xml URL with a 200, is
+// well-formed XHTML — and parsed as a job configuration whose root happened to
+// be <html>: available, no token found, CIS-2.3.5 PASS in v0.1. Only the root
+// elements Jenkins writes for jobs are read as configurations.
+func TestFetcherDoesNotTakeAnHTMLPageForAConfiguration(t *testing.T) {
+	for _, page := range []string{
+		`<?xml version="1.0"?><html><head><title>Access gateway</title></head><body><p>Please sign in</p></body></html>`,
+		`<?xml version="1.0"?><HTML xmlns="http://www.w3.org/1999/xhtml"><body/></HTML>`,
+	} {
+		job := configFor(t, page)
+		if job.Available[AvailJobConfig] {
+			t.Errorf("an HTML page was read as a configuration: %+v", job)
+		}
+		if len(job.Errors) == 0 || !strings.Contains(job.Errors[0], "HTML") {
+			t.Errorf("the job should say what came back instead: %v", job.Errors)
+		}
+	}
+}
+
+// A configuration for a job type the fetcher does not know is read, and
+// nothing in it is taken as known: not its definition, not its triggers, not
+// where it runs.
+func TestFetcherKnowsNothingAboutAJobTypeItDoesNotKnow(t *testing.T) {
+	job := configFor(t, `<?xml version='1.1'?><com.example.ExoticProject><triggers/><disabled>false</disabled></com.example.ExoticProject>`)
+	if !job.Available[AvailJobConfig] {
+		t.Fatalf("a configuration was served and read: %v", job.Errors)
+	}
+	if job.Definition.Source != ci.SourceUnknown || job.Definition.Class != "com.example.ExoticProject" {
+		t.Errorf("definition = %+v, want unknown naming the document", job.Definition)
+	}
+	if job.TriggersKnown || job.RemoteTriggerTokenKnown || job.RunsOnBuiltInNodeKnown {
+		t.Errorf("nothing about an unknown job type is known: %+v", job)
+	}
+}
+
+// A Maven job's build steps are form fields like a freestyle job's, under a
+// root element of its own — the shape maven-plugin 3.27 writes on 2.580.1.
+// v0.1 reported it MANUAL.
+func TestFetcherReadsAMavenJob(t *testing.T) {
+	job := configFor(t, `<?xml version="1.1" encoding="UTF-8"?>
+<maven2-moduleset plugin="maven-plugin@3.27">
+  <properties/><scm class="hudson.scm.NullSCM"/><canRoam>true</canRoam><disabled>false</disabled>
+  <triggers/><goals>clean verify</goals>
+</maven2-moduleset>`)
+	if job.Definition.Source != ci.SourceUI || !job.TriggersKnown {
+		t.Errorf("job = %+v, want ui with its triggers known", job)
+	}
+}

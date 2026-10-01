@@ -464,8 +464,29 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 		job.Errors = append(job.Errors, fmt.Sprintf("the job configuration could not be parsed (%v)", err))
 		return job, nil
 	}
+	// A proxy's sign-in or error page, served at the config.xml URL with a
+	// 200, can be well-formed XHTML. v0.1 parsed one as a job whose root
+	// happened to be <html> — available, no token in it, CIS-2.3.5 PASS.
+	root := cfg.XMLName.Local
+	if strings.EqualFold(root, "html") || cfg.XMLName.Space == "http://www.w3.org/1999/xhtml" {
+		job.Available[AvailJobConfig] = false
+		job.Errors = append(job.Errors, "the configuration request was answered with an HTML page, not a job configuration — "+
+			"most likely a sign-in or error page from something in front of the controller")
+		return job, nil
+	}
 	job.Available[AvailJobConfig] = true
-	f.applyConfig(&job, cfg, controller, builtInLabels)
+	doc, known := jobDocuments[root]
+	if !known {
+		// A job type nobody taught this fetcher: what defines it, what
+		// triggers it and where it runs could be anywhere in the document,
+		// so none of it is taken as known, and the controls say so.
+		if cfg.Disabled == "true" {
+			job.Disabled = true
+		}
+		job.Definition = ci.Definition{Source: ci.SourceUnknown, Class: root}
+		return job, nil
+	}
+	f.applyConfig(&job, cfg, doc, controller, builtInLabels)
 	return job, nil
 }
 
@@ -488,16 +509,16 @@ func decodeJobConfig(body []byte) (*jobConfig, error) {
 // applyConfig extracts booleans, counts and class names — nothing else. The
 // document holds the trigger token in cleartext, and snapshots are written to
 // disk and passed around.
-func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Controller, builtInLabels map[string]bool) {
+func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, doc jobDocument, controller *ci.Controller, builtInLabels map[string]bool) {
 	if cfg.Disabled == "true" {
 		job.Disabled = true
 	}
 
 	// Presence only.
 	job.RemoteTriggerToken = cfg.AuthToken != nil && strings.TrimSpace(*cfg.AuthToken) != ""
-	job.RemoteTriggerTokenKnown = true
+	job.RemoteTriggerTokenKnown = doc.project
 
-	job.Definition = definitionFrom(job.Kind, cfg)
+	job.Definition = definitionFrom(doc, cfg)
 	job.Triggers = triggersFrom(cfg)
 
 	var classes []string
@@ -513,12 +534,12 @@ func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Contro
 	// starts its builds is declared in each branch's Jenkinsfile and lands in
 	// the generated branch jobs, which the scan does not descend into — so
 	// the answer is unknown, whatever the project itself says.
-	job.TriggersKnown = job.Kind != ci.KindMultibranch && triggerDocuments[cfg.XMLName.Local]
+	job.TriggersKnown = doc.project
 
 	// Where a job runs. A pipeline picks its agent in the Jenkinsfile, which
 	// the controller does not parse into anything readable, so the answer is
-	// unknown rather than false.
-	if job.Kind == ci.KindPipeline || job.Kind == ci.KindMultibranch {
+	// unknown rather than false; only the project types say it here.
+	if !doc.ui {
 		job.RunsOnBuiltInNodeKnown = false
 		return
 	}
@@ -554,17 +575,15 @@ func isLabelExpression(s string) bool {
 	return strings.ContainsAny(s, "&|!()<>\"' \t")
 }
 
-func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
-	if kind == ci.KindMultibranch {
+func definitionFrom(doc jobDocument, cfg *jobConfig) ci.Definition {
+	switch {
+	case cfg.XMLName.Local == classMultibranch:
 		return multibranchDefinition(cfg)
-	}
-
-	if cfg.Definition == nil {
-		// No <definition> element and a <project> root: a freestyle or matrix
-		// job, whose build steps are configuration clicked into a form.
-		if cfg.XMLName.Local == "project" || cfg.XMLName.Local == "matrix-project" {
-			return ci.Definition{Source: ci.SourceUI}
-		}
+	case doc.ui:
+		// A freestyle, matrix or Maven job: build steps are configuration
+		// clicked into a form.
+		return ci.Definition{Source: ci.SourceUI}
+	case cfg.Definition == nil:
 		return ci.Definition{Source: ci.SourceUnknown}
 	}
 

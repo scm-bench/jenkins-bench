@@ -217,14 +217,28 @@ type configTrigger struct {
 	Spec    string `xml:"spec"`
 }
 
-// triggerDocuments are the configuration documents whose triggers are where
-// this fetcher reads them: <triggers> under the root for the project types, and
-// under PipelineTriggersJobProperty for a pipeline. A job type outside the set
-// may keep them anywhere, so its triggers are not taken as known.
-var triggerDocuments = map[string]bool{
-	"project":         true,
-	"matrix-project":  true,
-	"flow-definition": true,
+// jobDocument is what the fetcher knows about one kind of job configuration,
+// keyed by the document's root element.
+type jobDocument struct {
+	// ui is true for the project types, whose build steps are form fields and
+	// whose <assignedNode>/<canRoam> decide where they run.
+	ui bool
+	// project is true where the fields this fetcher reads are where it reads
+	// them: <authToken> at the root, and triggers under <triggers> or, for a
+	// pipeline, PipelineTriggersJobProperty.
+	project bool
+}
+
+// jobDocuments are the root elements read as job configurations, each from a
+// document Jenkins wrote on 2.580.1. Anything else is a job type this fetcher
+// has not been taught — read, but with nothing in it taken as known — or not
+// a configuration at all.
+var jobDocuments = map[string]jobDocument{
+	"project":          {ui: true, project: true}, // freestyle
+	"matrix-project":   {ui: true, project: true},
+	"maven2-moduleset": {ui: true, project: true}, // maven-plugin
+	"flow-definition":  {project: true},           // pipeline
+	classMultibranch:   {},                        // decided by its branch factory
 }
 
 // Definition classes, as they appear in config.xml.
