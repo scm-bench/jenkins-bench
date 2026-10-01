@@ -1,0 +1,47 @@
+examples/snapshot.json
+  s_66212c309e21f0::t_b57c6436d9d15e 89,114,137-138
+internal/checks/policies/jenkins/cis-2.1.2/check_test.rego
+  s_66212c309e21f0::t_0f5be9afedf370 71-85
+internal/checks/policies/jenkins/cis-2.1.2/metadata.json
+  s_66212c309e21f0::t_dedad9eb63dced 13
+internal/checks/policies/jenkins/cis-2.3.1/check.rego
+  s_66212c309e21f0::t_5be8228360196e 25-31,46,58-65
+internal/checks/policies/jenkins/cis-2.3.1/check_test.rego
+  s_66212c309e21f0::t_1bd9cd3f5d232b 87-112
+internal/checks/policies/jenkins/cis-2.3.1/metadata.json
+  s_66212c309e21f0::t_ad019c79bc5da7 13
+internal/ci/jenkins/fetcher.go
+  s_48d8fa1c49bfb6::t_7207f7e33c9684 559,571-572,574-575,581-588,593-634,636
+internal/ci/jenkins/fetcher_test.go
+  s_66212c309e21f0::t_8f2758bd20c672 347,358-360,801-901
+internal/ci/jenkins/models.go
+  s_48d8fa1c49bfb6::t_29b766c3c33852 142-155,165-169,213-231
+internal/ci/snapshot.go
+  s_48d8fa1c49bfb6::t_572214f37acc6d 210-216,228-230,234-235
+internal/cli/scan_test.go
+  s_66212c309e21f0::t_247f04d38fab17 643-698
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e63c15e22b6a3a4d197d08a4c326a257573ce1bb",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    },
+    "s_66212c309e21f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8763d161-5362-48a1-ae9b-11f7bcd83469",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
