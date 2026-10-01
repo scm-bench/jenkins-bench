@@ -1,0 +1,42 @@
+hack/e2e/expected.py
+  s_48d8fa1c49bfb6::t_340c3eae7554ec 1-128
+hack/recon/Dockerfile
+  s_48d8fa1c49bfb6::t_9cfaf746365b85 1,19-26,35-38
+  s_48d8fa1c49bfb6::t_a734cb0cb7bf47 39-40
+hack/e2e/verify.sh
+  s_48d8fa1c49bfb6::t_4e534a689af5f3 1-175
+hack/e2e/casc.yaml
+  s_48d8fa1c49bfb6::t_9c1b2c8678ca9d 1-347
+hack/e2e/README.md
+  s_48d8fa1c49bfb6::t_d4bcab02a4a5c8 1-98
+hack/e2e/up.sh
+  s_48d8fa1c49bfb6::t_ea0e7d27a3d2e5 1-109
+.gitignore
+  s_48d8fa1c49bfb6::t_6b3242bbbee760 12-14
+hack/e2e/expected/admin.tsv
+  s_48d8fa1c49bfb6::t_3474c45e63414a 1-86
+hack/e2e/expected/extended.tsv
+  s_48d8fa1c49bfb6::t_73e8daeaf008c8 1-86
+hack/e2e/expected/reader.tsv
+  s_48d8fa1c49bfb6::t_2ffa50e231f306 1-86
+hack/e2e/expected/sysread.tsv
+  s_48d8fa1c49bfb6::t_6efab1888e0f43 1-86
+hack/recon/README.md
+  s_48d8fa1c49bfb6::t_ff1045aea52055 49-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "acf2025821a7f6aedade2800afadd6ba38f627db",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
