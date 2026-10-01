@@ -7,7 +7,7 @@
     "baseUrl": "https://jenkins.example.com",
     "generatedAt": "2026-08-14T09:00:00Z",
     "warnings": [
-      "this token cannot read the plugin list, which needs Overall/Administer; plugin checks will report MANUAL"
+      "this token cannot read the plugin list, which needs Overall/SystemRead or Overall/Administer; plugin checks will report MANUAL"
     ]
   },
   "controller": {
@@ -74,7 +74,7 @@
       "jobs": true
     },
     "errors": [
-      "the plugin list could not be read (GET /pluginManager/api/json?depth=1: HTTP 403 Forbidden); Overall/Administer is required"
+      "the plugin list could not be read (GET /pluginManager/api/json?tree=plugins[shortName,version,enabled,active,hasUpdate]: HTTP 403 Forbidden); it needs Overall/SystemRead, which Overall/Administer implies"
     ]
   },
   "jobs": [

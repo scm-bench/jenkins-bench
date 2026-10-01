@@ -239,9 +239,9 @@ func (f *Fetcher) fetchPlugins(ctx context.Context, c *ci.Controller) {
 	var pm pluginManager
 	if err := f.client.GetJSON(ctx, "/pluginManager/api/json?tree="+pluginTree, &pm); err != nil {
 		c.Available[AvailPlugins] = false
-		c.Errors = append(c.Errors, fmt.Sprintf("the plugin list could not be read (%v); Overall/Administer is required", err))
+		c.Errors = append(c.Errors, fmt.Sprintf("the plugin list could not be read (%v); it needs Overall/SystemRead, which Overall/Administer implies", err))
 		if IsForbidden(err) {
-			f.warn("this token cannot read the plugin list, which needs Overall/Administer; plugin checks will report MANUAL")
+			f.warn("this token cannot read the plugin list, which needs Overall/SystemRead or Overall/Administer; plugin checks will report MANUAL")
 		}
 		return
 	}

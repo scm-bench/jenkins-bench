@@ -61,7 +61,8 @@ What the token can read decides what the report can say. A least-privilege
 token — Overall/Read plus Job/Read — cannot fetch a job's config.xml, and
 nothing about how a job is defined appears anywhere else, so every job-scope
 control reports MANUAL. Job/ExtendedRead makes them answerable;
-Overall/Administer additionally enables the plugin and credential controls.
+Overall/SystemRead additionally enables the plugin controls, and credential
+metadata needs Credentials/View, which Overall/Administer implies.
 None of that is guessed at: what could not be read is reported as MANUAL and
 left out of the score.
 

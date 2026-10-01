@@ -16,7 +16,7 @@ installed := [name |
 
 result := {
 	"status": "MANUAL",
-	"details": "The plugin list could not be read (it requires Overall/Administer), so whether the build environment is audited is unknown.",
+	"details": "The plugin list could not be read (it requires Overall/SystemRead or Overall/Administer), so whether the build environment is audited is unknown.",
 } if {
 	not lib.available("plugins")
 } else := {
