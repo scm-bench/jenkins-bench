@@ -1,0 +1,21 @@
+internal/ci/jenkins/fetcher.go
+  s_48d8fa1c49bfb6::t_6930c8f2d003f7 4,8,13,545-565,567,569-582,584,590-611
+internal/ci/jenkins/fetcher_test.go
+  s_48d8fa1c49bfb6::t_c52e08cc2309c7 1154-1181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "796d89d92ccf5a1d4db7d59ac7afeded7e3892e2",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
