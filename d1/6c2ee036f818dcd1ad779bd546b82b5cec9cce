@@ -1,0 +1,23 @@
+README.md
+  s_48d8fa1c49bfb6::t_0c91dc3f2466ce 43-53,57-59,62-75,78-88,109,115-121,126-130,136-268,312-326,342-347,352,355-357,370-414,420,426-433,439-440,442-444,456-458
+README.zh-CN.md
+  s_48d8fa1c49bfb6::t_5cdb37d907de83 32-40,44-45,48-59,62-71,86,92-98,103-106,112-229,247-260,264,267-269,272-310,315,319-325,329,331,333-334,344-346
+docs/jenkins-api-notes.md
+  s_48d8fa1c49bfb6::t_c44b350a199dd9 49-53,415-491
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d16c2ee036f818dcd1ad779bd546b82b5cec9cce",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
