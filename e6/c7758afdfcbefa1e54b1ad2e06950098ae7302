@@ -1,0 +1,31 @@
+examples/snapshot.json
+  s_48d8fa1c49bfb6::t_5aa94eab93f740 10,77
+internal/checks/policies/jenkins/cis-2.1.3/check.rego
+  s_48d8fa1c49bfb6::t_716d83c2181e39 19
+internal/checks/policies/jenkins/cis-2.1.3/check_test.rego
+  s_48d8fa1c49bfb6::t_e2ce34e0e2b3a2 41
+internal/checks/policies/jenkins/plugin-updates/check.rego
+  s_48d8fa1c49bfb6::t_19dc54e48f0bb9 41
+internal/checks/policies/lib/common.rego
+  s_48d8fa1c49bfb6::t_82230adc42b984 64-65
+internal/ci/jenkins/fetcher.go
+  s_48d8fa1c49bfb6::t_4c805b8f891e9c 242,244
+internal/cli/scan.go
+  s_48d8fa1c49bfb6::t_a374cb6142ea0e 64-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e6c7758afdfcbefa1e54b1ad2e06950098ae7302",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
