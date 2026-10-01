@@ -246,7 +246,7 @@ func (f *Fetcher) fetchUpdateSite(ctx context.Context, c *ci.Controller) {
 		return
 	}
 	c.Available[AvailUpdateSite] = true
-	c.UpdateSite.URL = site.URL
+	c.UpdateSite.URL = stripCredentials(site.URL)
 	if site.DataTimestamp != nil && *site.DataTimestamp > 0 {
 		c.UpdateSite.DataTimestamp = time.UnixMilli(*site.DataTimestamp).UTC()
 		c.UpdateSite.DataTimestampKnown = true
@@ -428,7 +428,7 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 		FullName:  it.FullName,
 		Name:      segs[len(segs)-1],
 		Folder:    strings.Join(segs[:len(segs)-1], "/"),
-		URL:       it.URL,
+		URL:       stripCredentials(it.URL),
 		Class:     it.Class,
 		Kind:      kindOf(it.Class),
 		Available: map[string]bool{},
@@ -574,7 +574,7 @@ func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
 		def := ci.Definition{Source: ci.SourceSCM, Class: d.Class, ScriptPath: d.ScriptPath}
 		for _, rc := range d.SCM.UserRemoteConfigs.Configs {
 			if rc.URL != "" {
-				def.SCMURLs = append(def.SCMURLs, rc.URL)
+				def.SCMURLs = append(def.SCMURLs, stripCredentials(rc.URL))
 			}
 		}
 		return def
@@ -620,7 +620,7 @@ func multibranchDefinition(cfg *jobConfig) ci.Definition {
 	def.Class = f.Class
 	for _, bs := range cfg.Sources.Data.BranchSources {
 		if bs.Source.Remote != "" {
-			def.SCMURLs = append(def.SCMURLs, bs.Source.Remote)
+			def.SCMURLs = append(def.SCMURLs, stripCredentials(bs.Source.Remote))
 		}
 	}
 	return def

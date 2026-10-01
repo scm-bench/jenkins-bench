@@ -899,3 +899,48 @@ func TestFetcherReadsBranchJobDefinitions(t *testing.T) {
 		})
 	}
 }
+
+// An SCM URL can carry a credential — https://deploy:<token>@host/… is how a
+// great many Jenkinsfiles were first wired up — and v0.1 copied remotes into
+// the snapshot verbatim. The README promised a snapshot safe to attach to a
+// bug report. Every URL the snapshot keeps is stripped of userinfo, query and
+// fragment, wherever it came from.
+func TestSnapshotHoldsNoCredentialsFromURLs(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"p","fullName":"p","url":"https://jenkins:urlpass-in-job-url@jenkins.example.com/job/p/"},
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/job/mb/"},
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"scp","fullName":"scp","url":"http://x/job/scp/"}]}`}
+	s.handlers["/job/p/api/json"] = standResponse{body: `{"disabled":false}`}
+	s.handlers["/job/mb/api/json"] = standResponse{body: `{}`}
+	s.handlers["/job/scp/api/json"] = standResponse{body: `{}`}
+	s.handlers["/job/p/config.xml"] = standResponse{body: `<flow-definition><definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition">
+		<scm class="hudson.plugins.git.GitSCM"><userRemoteConfigs><hudson.plugins.git.UserRemoteConfig>
+		<url>https://deploy:ghp_PLANTEDTOKEN1@github.com/acme/app.git?access_token=PLANTEDQUERY#PLANTEDFRAG</url>
+		</hudson.plugins.git.UserRemoteConfig></userRemoteConfigs></scm><scriptPath>Jenkinsfile</scriptPath></definition></flow-definition>`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject><sources><data><jenkins.branch.BranchSource>
+		<source class="jenkins.plugins.git.GitSCMSource"><remote>https://bot:glpat-PLANTEDTOKEN2@gitlab.example.com/a/b.git</remote></source>
+		</jenkins.branch.BranchSource></data></sources></org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+	s.handlers["/job/scp/config.xml"] = standResponse{body: `<flow-definition><definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition">
+		<scm class="hudson.plugins.git.GitSCM"><userRemoteConfigs><hudson.plugins.git.UserRemoteConfig>
+		<url>deploy:PLANTEDTOKEN3@git.example.com:acme/app.git</url>
+		</hudson.plugins.git.UserRemoteConfig></userRemoteConfigs></scm></definition></flow-definition>`}
+	s.handlers["/updateCenter/site/default/api/json"] = standResponse{body: `{"url":"https://mirror:PLANTEDTOKEN4@updates.example.com/update-center.json","dataTimestamp":1786650950902}`}
+
+	snap := fetchFrom(t, s)
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"urlpass-in-job-url", "PLANTEDTOKEN1", "PLANTEDQUERY", "PLANTEDFRAG", "PLANTEDTOKEN2", "PLANTEDTOKEN3", "PLANTEDTOKEN4", "deploy:", "bot:"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("the snapshot carries %q", secret)
+		}
+	}
+	// Where the definition comes from is still worth knowing.
+	if !strings.Contains(string(encoded), "https://github.com/acme/app.git") ||
+		!strings.Contains(string(encoded), "https://gitlab.example.com/a/b.git") ||
+		!strings.Contains(string(encoded), "git.example.com:acme/app.git") {
+		t.Errorf("the remotes should survive without their credentials: %s", encoded)
+	}
+}
