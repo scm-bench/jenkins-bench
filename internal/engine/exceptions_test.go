@@ -154,8 +154,8 @@ func TestExceptionNamingNoControlIsRefused(t *testing.T) {
 	cfg := config.Default()
 	cfg.Exceptions = []config.Exception{{Control: "CIS-2.3.55", Resources: []string{"*"}, Reason: "typo", Expires: "2099-01-01"}}
 	_, err := New(context.Background(), cfg, ci.PlatformJenkins)
-	if err == nil || !strings.Contains(err.Error(), "CIS-2.3.55") || !strings.Contains(err.Error(), "exceptions") {
-		t.Fatalf("err = %v, want the unknown control named", err)
+	if err == nil || !strings.Contains(err.Error(), "CIS-2.3.55 (exceptions[0])") {
+		t.Fatalf("err = %v, want the unknown control named with its exceptions[0] index", err)
 	}
 
 	cfg.Exceptions = []config.Exception{{Control: "  cis-2.3.5 ", Resources: []string{"legacy-build"}, Reason: "vendor job", Expires: "2099-01-01"}}

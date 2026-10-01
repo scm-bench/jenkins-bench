@@ -207,20 +207,23 @@ func validateSelection(cfg config.Config, bundle *checks.Bundle) error {
 		known[strings.ToUpper(c.ID)] = true
 	}
 
-	excepted := make([]string, 0, len(cfg.Exceptions))
-	for _, ex := range cfg.Exceptions {
-		excepted = append(excepted, ex.Control)
-	}
-
+	// Each unknown ID is named with where it was written — an exception by
+	// its index, as the config conventions require of every exception error.
 	var unknown []string
-	for _, list := range [][]string{cfg.Include, cfg.Exclude, excepted} {
-		for _, id := range list {
-			id = strings.TrimSpace(id)
-			if id == "" || known[strings.ToUpper(id)] {
-				continue
-			}
-			unknown = append(unknown, id)
+	note := func(id, where string) {
+		id = strings.TrimSpace(id)
+		if id != "" && !known[strings.ToUpper(id)] {
+			unknown = append(unknown, fmt.Sprintf("%s (%s)", id, where))
 		}
+	}
+	for _, id := range cfg.Include {
+		note(id, "include")
+	}
+	for _, id := range cfg.Exclude {
+		note(id, "exclude")
+	}
+	for i, ex := range cfg.Exceptions {
+		note(ex.Control, fmt.Sprintf("exceptions[%d]", i))
 	}
 	if len(unknown) == 0 {
 		return nil

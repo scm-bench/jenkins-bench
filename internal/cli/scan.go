@@ -208,6 +208,14 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		return fmt.Errorf("unknown report format %q for -o; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
 	}
 
+	// The bundle is compiled, and the control selection checked, before the
+	// controller is contacted: a typo in include, exclude or an exception
+	// refuses to start rather than costing a full scan to find out.
+	eng, err := engine.New(ctx, cfg, ci.PlatformJenkins)
+	if err != nil {
+		return err
+	}
+
 	// The tracer exists even when it prints nothing per request: its closing
 	// line accounts for what the token was used for, and that belongs in a
 	// CI log as much as on a terminal.
@@ -232,10 +240,6 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		}
 	}
 
-	eng, err := engine.New(ctx, cfg, ci.PlatformJenkins)
-	if err != nil {
-		return err
-	}
 	rep, err := eng.Evaluate(ctx, snapshot)
 	if err != nil {
 		return err

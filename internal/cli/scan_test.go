@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1007,5 +1008,24 @@ func TestExceptionsClearTheGateButNotTheReport(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "lapsed on 2001-01-01") {
 		t.Errorf("stderr does not report the lapse:\n%s", stderr)
+	}
+}
+
+// A typo in the control selection refuses to start before the controller is
+// contacted: finding it out after a full scan of a large controller is an
+// hour wasted on a config file.
+func TestScanChecksTheSelectionBeforeContactingTheController(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	_, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--set", "include=[CIS-9.9.9]")
+	if code := ExitCode(err); code != ExitError || !strings.Contains(err.Error(), "CIS-9.9.9 (include)") {
+		t.Fatalf("exit %d (%v), want 2 naming the unknown ID", code, err)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("%d requests were sent before a config error that needed none", n)
 	}
 }
