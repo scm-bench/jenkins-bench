@@ -863,3 +863,34 @@ func TestMaxResourcesCapsTheDetailSections(t *testing.T) {
 		t.Error("a negative cap should be refused")
 	}
 }
+
+// A freestyle job's System Groovy step runs on the controller with the
+// controller's privileges when its sandbox is off — the same exposure CIS-2.1.2
+// fails an inline pipeline for — and the control said NA, "no inline pipeline
+// script". The shape is what the groovy plugin writes on 2.580.1.
+func TestScanJudgesGroovyOutsideThePipelineDefinition(t *testing.T) {
+	groovy := func(sandbox string) string {
+		return `<?xml version="1.1" encoding="UTF-8"?><project><canRoam>true</canRoam><disabled>false</disabled><triggers/>
+			<builders><hudson.plugins.groovy.SystemGroovy plugin="groovy@537.v741a_5a_f1b_581">
+			<source class="hudson.plugins.groovy.StringSystemScriptSource"><script plugin="script-security@1429.v0810f1b_530f5">
+			<script>println "x"</script><sandbox>` + sandbox + `</sandbox><classpath/></script></source><bindings></bindings>
+			</hudson.plugins.groovy.SystemGroovy></builders><publishers/></project>`
+	}
+	serve := func(body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }
+	}
+	srv := controllerServing(t, false,
+		`{"_class":"hudson.model.FreeStyleProject","name":"open","fullName":"open","url":"http://x/"},`+
+			`{"_class":"hudson.model.FreeStyleProject","name":"walled","fullName":"walled","url":"http://x/"}`,
+		map[string]http.HandlerFunc{
+			"/job/open/config.xml":   serve(groovy("false")),
+			"/job/walled/config.xml": serve(groovy("true")),
+		})
+	got, _ := verdicts(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t")
+	if got["CIS-2.1.2 open"] != "FAIL" {
+		t.Errorf("CIS-2.1.2 open = %q, want FAIL: System Groovy outside the sandbox", got["CIS-2.1.2 open"])
+	}
+	if got["CIS-2.1.2 walled"] != "PASS" {
+		t.Errorf("CIS-2.1.2 walled = %q, want PASS: the job's only script is sandboxed", got["CIS-2.1.2 walled"])
+	}
+}

@@ -181,6 +181,12 @@ type Job struct {
 	Buildable  bool       `json:"buildable"`
 	Definition Definition `json:"definition"`
 	Triggers   []Trigger  `json:"triggers,omitempty"`
+	// Scripts are the Groovy scripts in the job's configuration outside its
+	// pipeline definition — a System Groovy build step, a Groovy Postbuild
+	// publisher, an Active Choices parameter, a Job DSL step — each by the
+	// class that holds it and whether it runs in the sandbox. Never the
+	// script itself.
+	Scripts []Script `json:"scripts,omitempty"`
 	// RemoteTriggerToken is whether one is configured. Never the token.
 	RemoteTriggerToken      bool `json:"remoteTriggerToken"`
 	RemoteTriggerTokenKnown bool `json:"remoteTriggerTokenKnown"`
@@ -253,6 +259,16 @@ const (
 	// leaves Available["config"] false and no Definition at all.
 	SourceUnknown = "unknown"
 )
+
+// Script is one Groovy script a job carries outside its definition.
+type Script struct {
+	// Holder is the class of the build step, publisher or parameter that
+	// holds the script, e.g. hudson.plugins.groovy.SystemGroovy.
+	Holder string `json:"holder"`
+	// Sandbox is whether script-security runs it in the Groovy sandbox.
+	// Outside it, an approved script runs with the controller's privileges.
+	Sandbox bool `json:"sandbox"`
+}
 
 // Trigger is one configured build trigger. Spec is a cron-like expression and
 // never a token.

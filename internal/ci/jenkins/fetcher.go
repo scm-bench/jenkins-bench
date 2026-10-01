@@ -565,6 +565,17 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 	}
 	job.Available[AvailJobConfig] = true
 	doc, known := jobDocuments[root]
+	if known {
+		scripts, err := findScripts(body)
+		if err != nil {
+			// The document decoded a moment ago, so this does not happen;
+			// if it ever does, the scripts are unknown, not absent.
+			job.Available[AvailJobConfig] = false
+			job.Errors = append(job.Errors, fmt.Sprintf("the job configuration could not be scanned for scripts (%v)", err))
+			return job, nil
+		}
+		job.Scripts = scripts
+	}
 	if !known {
 		// A job type nobody taught this fetcher: what defines it, what
 		// triggers it and where it runs could be anywhere in the document,
@@ -604,9 +615,19 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // Anything else 1.1 permits and 1.0 does not still fails, as a recorded parse
 // error rather than a guess.
 func decodeJobConfig(body []byte) (*jobConfig, error) {
+	var cfg jobConfig
+	if err := newConfigDecoder(prepareConfigXML(body)).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// prepareConfigXML smooths a config.xml over for encoding/xml; see
+// decodeJobConfig.
+func prepareConfigXML(body []byte) []byte {
 	body = bytes.TrimPrefix(body, utf8BOM)
 	body = xmlDeclaration.ReplaceAll(body, []byte(`${1}1.0${3}`))
-	body = controlCharRef.ReplaceAllFunc(body, func(ref []byte) []byte {
+	return controlCharRef.ReplaceAllFunc(body, func(ref []byte) []byte {
 		digits := string(ref[2 : len(ref)-1])
 		base := 10
 		if digits[0] == 'x' {
@@ -618,13 +639,13 @@ func decodeJobConfig(body []byte) (*jobConfig, error) {
 		}
 		return []byte("&#xFFFD;")
 	})
+}
+
+// newConfigDecoder reads a prepared config.xml.
+func newConfigDecoder(body []byte) *xml.Decoder {
 	decoder := xml.NewDecoder(bytes.NewReader(body))
 	decoder.CharsetReader = charsetReader
-	var cfg jobConfig
-	if err := decoder.Decode(&cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	return decoder
 }
 
 // charsetReader decodes the single-byte encodings a config.xml declaration

@@ -83,3 +83,45 @@ test_fails_for_a_multibranch_project_with_an_unsandboxed_factory_script if {
 	})
 	r.status == "FAIL"
 }
+
+# A System Groovy build step with its sandbox off is Groovy on the controller
+# with the controller's privileges, in a job with no pipeline at all. This
+# control said NA for it.
+test_fails_for_an_unsandboxed_script_outside_the_definition if {
+	r := cis_2_1_2.result with input as testdata.job_input({
+		"kind": "freestyle",
+		"definition": {"source": "ui"},
+		"scripts": [
+			{"holder": "hudson.plugins.groovy.SystemGroovy", "sandbox": false},
+			{"holder": "org.jvnet.hudson.plugins.groovypostbuild.GroovyPostbuildRecorder", "sandbox": true},
+		],
+	})
+	r.status == "FAIL"
+	contains(r.details, "hudson.plugins.groovy.SystemGroovy")
+	r.evidence == ["sandbox = false in hudson.plugins.groovy.SystemGroovy"]
+}
+
+# One unsandboxed script fails the job even when the definition is unknown.
+test_fails_for_an_unsandboxed_script_beside_an_unknown_definition if {
+	r := cis_2_1_2.result with input as testdata.job_input({
+		"definition": {"source": "unknown"},
+		"scripts": [{"holder": "javaposse.jobdsl.plugin.ExecuteDslScripts", "sandbox": false}],
+	})
+	r.status == "FAIL"
+}
+
+test_passes_when_every_script_is_sandboxed if {
+	r := cis_2_1_2.result with input as testdata.job_input({
+		"kind": "freestyle",
+		"definition": {"source": "ui"},
+		"scripts": [{"holder": "hudson.plugins.groovy.SystemGroovy", "sandbox": true}],
+	})
+	r.status == "PASS"
+	contains(r.details, "hudson.plugins.groovy.SystemGroovy")
+}
+
+test_null_scripts_read_as_none if {
+	j := testdata.replacing(testdata.job({"kind": "freestyle", "definition": {"source": "ui"}}), "scripts", null)
+	r := cis_2_1_2.result with input as testdata.input_for(j)
+	r.status == "NA"
+}
