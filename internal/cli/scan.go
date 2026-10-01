@@ -34,6 +34,7 @@ type scanOptions struct {
 	details        string
 	detailsSet     bool
 	showPassed     bool
+	maxResources   int
 	noRemediations bool
 	noColor        bool
 
@@ -109,6 +110,9 @@ token that can read very little is the common case.`,
 	f.StringVar(&opts.details, "details", "", "expand to per-resource sections; --details=<resource|control>[,...] narrows them")
 	f.Lookup("details").NoOptDefVal = " "
 	f.BoolVar(&opts.showPassed, "show-passed", false, "include passing controls in the report")
+	// A controller with thousands of jobs makes --details thousands of
+	// sections; this caps them, and says how many were left out.
+	f.IntVar(&opts.maxResources, "max-resources", report.DefaultMaxResources, "with --details: how many resources get a section of their own; 0 means every one")
 	f.BoolVar(&opts.noRemediations, "no-remediations", false, "omit the remediation section")
 	f.BoolVar(&opts.noColor, "no-color", false, "disable ANSI colour")
 
@@ -151,6 +155,14 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 
 	if err := resolveFormat(cmd, opts); err != nil {
 		return err
+	}
+	// Refused rather than ignored: the overview has no per-resource sections
+	// to cap, and a flag that silently does nothing reads as one that worked.
+	if cmd.Flags().Changed("max-resources") && !cmd.Flags().Changed("details") {
+		return fmt.Errorf("--max-resources caps the per-resource sections, which only --details prints; combine the two")
+	}
+	if opts.maxResources < 0 {
+		return fmt.Errorf("--max-resources must be 0 (every resource) or more, got %d", opts.maxResources)
 	}
 
 	cfg, path, err := loadScanConfig(opts)
@@ -204,6 +216,7 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		NoRemediations: opts.noRemediations,
 		Details:        cmd.Flags().Changed("details"),
 		DetailFilters:  splitFilters(opts.details),
+		MaxResources:   opts.maxResources,
 		ToolVersion:    Version,
 	}
 	if opts.outputFile == "" {

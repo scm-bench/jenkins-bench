@@ -835,3 +835,31 @@ func TestSnapshotOutTightensAnExistingFile(t *testing.T) {
 		t.Errorf("the stale file was not replaced:\n%s", body)
 	}
 }
+
+// The details view's own footer named --max-resources while no such flag
+// existed. It caps the per-resource sections now, and only with --details.
+func TestMaxResourcesCapsTheDetailSections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+		"controller":{"available":{"root":true,"jobs":true}},
+		"jobs":[{"fullName":"a","available":{"api":true,"config":false}},
+		        {"fullName":"b","available":{"api":true,"config":false}},
+		        {"fullName":"c","available":{"api":true,"config":false}}]}`
+	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScanCmd(t, "scan", "--snapshot-in", path, "--details", "--max-resources", "1", "--no-color")
+	if err != nil {
+		t.Fatalf("scan: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "not shown (--max-resources 1)") {
+		t.Errorf("the capped sections should be counted:\n%s", out)
+	}
+	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "--max-resources", "1"); err == nil ||
+		!strings.Contains(err.Error(), "--details") {
+		t.Errorf("--max-resources without --details should say what it needs: %v", err)
+	}
+	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "--details", "--max-resources", "-1"); err == nil {
+		t.Error("a negative cap should be refused")
+	}
+}
