@@ -144,3 +144,35 @@ func TestEvaluateAppliesExceptions(t *testing.T) {
 	}
 	t.Fatal("no CIS-2.3.1 finding for legacy-build")
 }
+
+// An exception for CIS-2.3.55 instead of CIS-2.3.5 accepts nothing. It fails
+// safe — the finding still fails the run — but the only clue was a warning
+// that it matched nothing, next to an exception plainly visible in the file.
+// It is refused at startup, as an include or exclude naming no control is,
+// with the same tolerance for case and padding.
+func TestExceptionNamingNoControlIsRefused(t *testing.T) {
+	cfg := config.Default()
+	cfg.Exceptions = []config.Exception{{Control: "CIS-2.3.55", Resources: []string{"*"}, Reason: "typo", Expires: "2099-01-01"}}
+	_, err := New(context.Background(), cfg, ci.PlatformJenkins)
+	if err == nil || !strings.Contains(err.Error(), "CIS-2.3.55") || !strings.Contains(err.Error(), "exceptions") {
+		t.Fatalf("err = %v, want the unknown control named", err)
+	}
+
+	cfg.Exceptions = []config.Exception{{Control: "  cis-2.3.5 ", Resources: []string{"legacy-build"}, Reason: "vendor job", Expires: "2099-01-01"}}
+	eng, err := New(context.Background(), cfg, ci.PlatformJenkins)
+	if err != nil {
+		t.Fatalf("a valid ID with different case and padding was rejected: %v", err)
+	}
+	// And, accepted at startup, it applies: the same tolerance on both sides.
+	snap := hardenedSnapshot()
+	snap.Jobs[1].UnauthenticatedTriggers = []string{"authToken"}
+	snap.Jobs[1].TriggersKnown = true
+	eng.now = func() time.Time { return exceptionNow }
+	rep, err := eng.Evaluate(context.Background(), snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.ExceptionWarnings) != 0 {
+		t.Errorf("a padded control ID accepted at startup must match: %v", rep.ExceptionWarnings)
+	}
+}
