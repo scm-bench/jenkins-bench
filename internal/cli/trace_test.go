@@ -149,7 +149,7 @@ func TestScanAccountsForItsRequests(t *testing.T) {
 // requests.
 func TestOfflineScanHasNoAccountingLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	snap := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":true,"jobs":true}},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {

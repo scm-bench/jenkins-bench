@@ -130,7 +130,7 @@ func TestScanOfControllerControlsAloneNeedsNoJobs(t *testing.T) {
 // permission, and the result is the same: nothing job-scope was audited.
 func TestScanWhoseJobsWereAllSkippedExitsTwo(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	snap := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":true,"jobs":true}},
 		"jobs":[{"fullName":"old","disabled":true,"available":{"api":true,"config":true},"definition":{"source":"ui"}}]}`
 	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
@@ -280,7 +280,7 @@ func TestScanRoundTripsASnapshot(t *testing.T) {
 func TestScanReportsManualForWhatItCouldNotRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blind.json")
-	blind := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	blind := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":false,"jobs":true},"errors":["the instance API could not be read (HTTP 403)"]},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false},"errors":["HTTP 403"]}]}`
 	if err := os.WriteFile(path, []byte(blind), 0o600); err != nil {
@@ -308,7 +308,7 @@ func TestScanReportsManualForWhatItCouldNotRead(t *testing.T) {
 // can read very little otherwise produces a high score from a small sample.
 func TestScanFailsWhenTooMuchWentUnread(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "blind.json")
-	blind := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	blind := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":false,"jobs":true}},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(blind), 0o600); err != nil {
@@ -329,7 +329,7 @@ func TestScanFailsWhenTooMuchWentUnread(t *testing.T) {
 
 func TestScanRejectsAnUnknownFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","metadata":{"platform":"jenkins"},"controller":{"available":{}}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"2","metadata":{"platform":"jenkins"},"controller":{"available":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "-o", "yaml"); err == nil {
@@ -358,7 +358,7 @@ func TestScanRejectsAFileThatIsNotASnapshot(t *testing.T) {
 // against this bench's controls.
 func TestScanRejectsASnapshotWithoutAPlatform(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","controller":{"available":{}}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"2","controller":{"available":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runScanCmd(t, "scan", "--snapshot-in", path)
@@ -562,7 +562,7 @@ func TestScanThatCouldNotListAFolderExitsTwo(t *testing.T) {
 // older build, or edited — proves nothing about the jobs it would have held.
 func TestScanOfASnapshotWithoutAListingRecordIsIncomplete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	snap := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":true}},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
@@ -741,7 +741,7 @@ func TestScanDoesNotTakeASignInPageForAnonymousAccess(t *testing.T) {
 // file it reads, on stderr, found or given.
 func TestScanNamesTheConfigFileItUses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	snap := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":true,"jobs":true}},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
@@ -777,7 +777,7 @@ func TestScanNamesTheConfigFileItUses(t *testing.T) {
 // new one.
 func TestOutputFlagAndItsDeprecatedAlias(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	snap := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":true,"jobs":true}},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
@@ -849,7 +849,7 @@ func TestSnapshotOutTightensAnExistingFile(t *testing.T) {
 // existed. It caps the per-resource sections now, and only with --details.
 func TestMaxResourcesCapsTheDetailSections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+	snap := `{"schemaVersion":"2","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
 		"controller":{"available":{"root":true,"jobs":true}},
 		"jobs":[{"fullName":"a","available":{"api":true,"config":false}},
 		        {"fullName":"b","available":{"api":true,"config":false}},
@@ -927,7 +927,7 @@ func TestScanWithAnUnknownTargetExitsTwo(t *testing.T) {
 
 func TestScopingFlagsAreRefusedWithASnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","metadata":{"platform":"jenkins"},"controller":{"available":{"jobs":true}}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"2","metadata":{"platform":"jenkins"},"controller":{"available":{"jobs":true}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, flag := range []string{"--folder", "--job"} {
@@ -944,5 +944,25 @@ func TestScanRefusesAnUnusableCAFile(t *testing.T) {
 		"--set", "scan.caFile="+filepath.Join(t.TempDir(), "missing.pem"))
 	if code := ExitCode(err); code != ExitError || !strings.Contains(err.Error(), "scan.caFile") {
 		t.Errorf("exit %d (%v); a missing CA bundle should stop the scan, naming scan.caFile", code, err)
+	}
+}
+
+// A version 1 snapshot records what v0.1 believed — every multibranch project
+// "scm", triggers only ever <authToken> — and lacks whether its job list was
+// complete. It is refused with the recovery in the message, not evaluated
+// into a report that looks like a scan of the controller.
+func TestScanRefusesAVersionOneSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","metadata":{"platform":"jenkins"},"controller":{"available":{}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runScanCmd(t, "scan", "--snapshot-in", path)
+	if code := ExitCode(err); code != ExitError {
+		t.Fatalf("exit %d (%v), want %d", code, err, ExitError)
+	}
+	for _, want := range []string{`"1"`, `"2"`, "Capture it again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal should contain %q: %v", want, err)
+		}
 	}
 }

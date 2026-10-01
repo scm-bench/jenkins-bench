@@ -424,8 +424,11 @@ func readSnapshot(path string) (*ci.Snapshot, error) {
 		// reason about, and reading it anyway would produce verdicts about
 		// fields that have moved. Strict equality, so a file that merely
 		// parses as JSON — with no schemaVersion at all — is refused rather
-		// than evaluated into a page of MANUALs and a clean exit.
-		return nil, fmt.Errorf("snapshot %s has schemaVersion %q; this build reads %q",
+		// than evaluated into a page of MANUALs and a clean exit. The refusal
+		// carries the whole recovery, since there is no report to fall back on.
+		return nil, fmt.Errorf("snapshot %s has schemaVersion %q, but this build reads %q.\n"+
+			"Capture it again with this build: the older shape lacks what the current controls decide on, "+
+			"and evaluating it anyway would report verdicts its data cannot support",
 			path, snapshot.SchemaVersion, ci.SchemaVersion)
 	}
 	if snapshot.Metadata.Platform == "" {

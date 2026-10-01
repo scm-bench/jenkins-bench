@@ -9,9 +9,19 @@ package ci
 
 import "time"
 
-// SchemaVersion is bumped whenever the snapshot shape changes in a way that
-// existing policies would misread.
-const SchemaVersion = "1"
+// SchemaVersion is bumped whenever the snapshot shape changes, and a reader
+// refuses any version it was not built for.
+//
+// "2": what a version 1 file records is what v0.1 believed, and v0.1 was
+// wrong in ways the current controls decide on — every multibranch project's
+// definition was "scm" whatever its branch factory, a trigger was only ever
+// <authToken>, and an empty credential store counted as complete for a
+// SystemRead token. A version 1 file also lacks what the current scan relies
+// on: whether its job list was complete, the triggers and scripts it
+// resolved, and the built-in node's mode and labels. Read anyway, it would
+// produce a report that looks like a scan of the controller and is a scan of
+// what an old file happened to record.
+const SchemaVersion = "2"
 
 // Platform identifiers used in Metadata.Platform and check metadata.
 const (
