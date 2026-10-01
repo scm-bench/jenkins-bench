@@ -314,3 +314,42 @@ func TestEvaluateIsCancellable(t *testing.T) {
 		}
 	}
 }
+
+// Coverage is what lets the CLI tell "every job is fine" from "there were no
+// jobs to judge": the score reads the same for both.
+func TestCoverageCountsWhatTheJobControlsSaw(t *testing.T) {
+	rep := evaluate(t, config.Default(), hardenedSnapshot())
+	if rep.Coverage.Jobs != 2 {
+		t.Errorf("coverage.jobs = %d, want 2", rep.Coverage.Jobs)
+	}
+	if rep.Coverage.JobControls == 0 {
+		t.Error("the bundle ships job-scope controls; coverage should count them")
+	}
+	if rep.Coverage.NoJobsAudited() {
+		t.Error("two jobs were audited")
+	}
+
+	empty := hardenedSnapshot()
+	empty.Jobs = nil
+	if rep := evaluate(t, config.Default(), empty); !rep.Coverage.NoJobsAudited() {
+		t.Errorf("a snapshot without jobs audited none: %+v", rep.Coverage)
+	}
+
+	cfg := config.Default()
+	cfg.SkipDisabledJobs = true
+	skipped := hardenedSnapshot()
+	for i := range skipped.Jobs {
+		skipped.Jobs[i].Disabled = true
+	}
+	rep = evaluate(t, cfg, skipped)
+	if rep.Coverage.SkippedDisabled != 2 || !rep.Coverage.NoJobsAudited() {
+		t.Errorf("coverage = %+v, want both jobs skipped and none audited", rep.Coverage)
+	}
+
+	// Narrowed to a controller-scope control, nothing asked about jobs.
+	cfg = config.Default()
+	cfg.Include = []string{"CIS-2.1.6"}
+	if rep := evaluate(t, cfg, empty); rep.Coverage.NoJobsAudited() {
+		t.Errorf("a controller-only run did not need jobs: %+v", rep.Coverage)
+	}
+}

@@ -16,11 +16,22 @@ import (
 	"github.com/scm-bench/jenkins-bench/internal/engine"
 )
 
+// hardenedJob is one pipeline read from a Jenkinsfile in SCM — the shape every
+// job-scope control passes or reports NA for.
+const hardenedJob = `{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"app","fullName":"app","url":"http://x/job/app/"}`
+
 // controller is a stand-in that answers enough for a scan to complete, with the
-// posture given.
+// posture given and one hardened job.
 func controller(t *testing.T, anonymousAllowed bool) *httptest.Server {
 	t.Helper()
-	const instanceBody = `{"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"jobs":[]}`
+	return controllerWithJobs(t, anonymousAllowed, hardenedJob)
+}
+
+// controllerWithJobs is controller with the root job listing given as the
+// inside of a JSON array.
+func controllerWithJobs(t *testing.T, anonymousAllowed bool, jobs string) *httptest.Server {
+	t.Helper()
+	instanceBody := `{"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"jobs":[` + jobs + `]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("the scan issued a %s to %s", r.Method, r.URL.Path)
@@ -59,12 +70,68 @@ func controller(t *testing.T, anonymousAllowed bool) *httptest.Server {
 			fmt.Fprintf(w, `{"url":"https://updates.jenkins.io/update-center.json","dataTimestamp":%d}`, time.Now().Add(-time.Hour).UnixMilli())
 		case "/credentials/api/json":
 			fmt.Fprint(w, `{"stores":{"system":{"domains":{"_":{"credentials":[]}}}}}`)
+		case "/job/app/api/json":
+			fmt.Fprint(w, `{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","fullName":"app","disabled":false,"buildable":true}`)
+		case "/job/app/config.xml":
+			fmt.Fprint(w, `<?xml version='1.1' encoding='UTF-8'?><flow-definition>
+				<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition>
+				<disabled>false</disabled></flow-definition>`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// A token without Job/Read is not refused the job list: the controller answers
+// 200 with {"jobs":[]}, exactly as it would for a controller that has none.
+// v0.1 evaluated the controller-scope controls, found nothing wrong with them
+// and exited 0 — a green CI step for a scan that audited no job at all.
+func TestScanThatEvaluatedNoJobsExitsTwo(t *testing.T) {
+	srv := controllerWithJobs(t, false, "")
+	out, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color")
+	if code := ExitCode(err); code != ExitError {
+		t.Fatalf("exit code = %d (%v), want %d: nothing job-scope was audited\n%s", code, err, ExitError, out)
+	}
+	if !strings.Contains(err.Error(), "Job/Read") {
+		t.Errorf("the message should name the permission that makes jobs visible: %v", err)
+	}
+	// The report is still written: the controller-scope verdicts are real,
+	// and the reader needs them to see what the scan did manage.
+	if !strings.Contains(out, "SCORE") {
+		t.Errorf("the report should still be written:\n%s", out)
+	}
+}
+
+// A run narrowed to controller-scope controls asked nothing about jobs, so an
+// empty job list leaves nothing unanswered.
+func TestScanOfControllerControlsAloneNeedsNoJobs(t *testing.T) {
+	srv := controllerWithJobs(t, false, "")
+	out, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color",
+		"--set", "include=[CIS-2.1.6]")
+	if err != nil {
+		t.Fatalf("a controller-only run should not need jobs: %v\n%s", err, out)
+	}
+}
+
+// scan.skipDisabledJobs can empty the job list as surely as a missing
+// permission, and the result is the same: nothing job-scope was audited.
+func TestScanWhoseJobsWereAllSkippedExitsTwo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+		"controller":{"available":{"root":true}},
+		"jobs":[{"fullName":"old","disabled":true,"available":{"api":true,"config":true},"definition":{"source":"ui"}}]}`
+	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runScanCmd(t, "scan", "--snapshot-in", path, "--set", "skipDisabledJobs=true", "--no-color")
+	if code := ExitCode(err); code != ExitError {
+		t.Fatalf("exit code = %d (%v), want %d", code, err, ExitError)
+	}
+	if !strings.Contains(err.Error(), "skipDisabledJobs") {
+		t.Errorf("the message should say the setting dropped them: %v", err)
+	}
 }
 
 // runScanCmd executes the command tree and returns stdout and the error, so the
@@ -194,7 +261,8 @@ func TestScanReportsManualForWhatItCouldNotRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blind.json")
 	blind := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
-		"controller":{"available":{"root":false},"errors":["the instance API could not be read (HTTP 403)"]}}`
+		"controller":{"available":{"root":false},"errors":["the instance API could not be read (HTTP 403)"]},
+		"jobs":[{"fullName":"app","available":{"api":true,"config":false},"errors":["HTTP 403"]}]}`
 	if err := os.WriteFile(path, []byte(blind), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +289,8 @@ func TestScanReportsManualForWhatItCouldNotRead(t *testing.T) {
 func TestScanFailsWhenTooMuchWentUnread(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "blind.json")
 	blind := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
-		"controller":{"available":{"root":false}}}`
+		"controller":{"available":{"root":false}},
+		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(blind), 0o600); err != nil {
 		t.Fatal(err)
 	}

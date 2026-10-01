@@ -358,6 +358,27 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		}
 	}
 
+	// Nothing job-scope was audited, so no verdict below is about the jobs.
+	// The case this exists for is a token without Job/Read: the controller
+	// does not refuse it the job list, it hands it an empty one, and the
+	// controller-scope controls then pass on their own. Exit 2 rather than 1:
+	// the scan did not find a problem, it failed to look.
+	if rep.Coverage.NoJobsAudited() {
+		if rep.Coverage.SkippedDisabled > 0 {
+			return &exitCodeError{
+				code: ExitError,
+				msg: fmt.Sprintf("no job was evaluated: all %s were disabled, and skipDisabledJobs left them out\n"+
+					"set skipDisabledJobs back to false to report them as NA, or narrow the run to controller-scope controls with include",
+					console.Pluralize(rep.Coverage.SkippedDisabled, "job")),
+			}
+		}
+		return &exitCodeError{
+			code: ExitError,
+			msg: "no job was evaluated: the controller listed none that this token can read, so nothing job-scope was audited\n" +
+				"a token without Job/Read is shown an empty job list rather than an error; grant it Job/Read (and Job/ExtendedRead to judge them)",
+		}
+	}
+
 	if opts.scan.MaxManual >= 0 {
 		// Only automated controls count against the gate. The bundle ships
 		// controls that are MANUAL by design (automated: false, no API can

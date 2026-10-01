@@ -75,9 +75,32 @@ type Report struct {
 	Metadata ci.Metadata `json:"metadata"`
 	Findings []Finding   `json:"findings"`
 	Score    Score       `json:"score"`
+	// Coverage is how much of the controller the findings describe. The score
+	// cannot say it: a scan that judged no job scores exactly like one whose
+	// jobs were all fine.
+	Coverage Coverage `json:"coverage"`
 	// Errors records policies that failed to evaluate. They surface as MANUAL
 	// findings too, so a broken rule is loud but not fatal.
 	Errors []string `json:"errors,omitempty"`
+}
+
+// Coverage counts what the job-scope controls were evaluated against.
+type Coverage struct {
+	// Jobs is how many jobs the job-scope controls were evaluated against.
+	Jobs int `json:"jobs"`
+	// SkippedDisabled is how many jobs scan.skipDisabledJobs left out.
+	SkippedDisabled int `json:"skippedDisabled,omitempty"`
+	// JobControls is how many job-scope controls the run selected. Zero jobs
+	// only means "nothing was audited" when at least one control asked about
+	// jobs; a run narrowed to controller-scope controls asked nothing.
+	JobControls int `json:"jobControls"`
+}
+
+// NoJobsAudited reports whether the run asked about jobs and had none to ask
+// about. A token without Job/Read is shown an empty job list rather than a
+// 403, so this is the only place that case becomes visible.
+func (c Coverage) NoJobsAudited() bool {
+	return c.JobControls > 0 && c.Jobs == 0
 }
 
 // Engine holds the compiled policy bundle.
@@ -201,6 +224,7 @@ func (e *Engine) Evaluate(ctx context.Context, snapshot *ci.Snapshot) (*Report, 
 		// must not produce two answers depending on whether the snapshot came
 		// off the wire or off disk.
 		if e.cfg.SkipDisabledJobs && job.Disabled {
+			report.Coverage.SkippedDisabled++
 			continue
 		}
 		value, encErr := toJSONValue(job)
@@ -208,6 +232,12 @@ func (e *Engine) Evaluate(ctx context.Context, snapshot *ci.Snapshot) (*Report, 
 			return nil, fmt.Errorf("encode job %s: %w", job.FullName, encErr)
 		}
 		jobInputs = append(jobInputs, jobInput{name: job.FullName, value: value})
+	}
+	report.Coverage.Jobs = len(jobInputs)
+	for _, check := range e.selected {
+		if check.Scope == checks.ScopeJob {
+			report.Coverage.JobControls++
+		}
 	}
 
 	for _, check := range e.selected {

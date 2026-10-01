@@ -230,6 +230,13 @@ func writeSummary(w io.Writer, rep *engine.Report, p painter, width int) {
 			"scored %d of %d findings (%d%%); %d could not be evaluated",
 			scored, decidable, coverage, s.Manual))
 	}
+
+	// The score above is about the controller alone when no job was judged,
+	// and nothing else on the page says so — the job findings are simply
+	// absent, which is what a clean controller looks like too.
+	if rep.Coverage.NoJobsAudited() {
+		summaryLine(w, p, width, ansiYellow, "no job was evaluated: nothing job-scope was audited")
+	}
 }
 
 // failedControls counts the distinct controls with at least one failure —

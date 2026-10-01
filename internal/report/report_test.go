@@ -504,3 +504,46 @@ func TestEveryLineFitsTheTerminalWidth(t *testing.T) {
 		}
 	}
 }
+
+// A run that judged no job must not look like one whose jobs were all fine, in
+// any format: the table says so beside the score, and SARIF marks the run as
+// not having executed successfully, which code scanning surfaces instead of
+// closing every job alert as fixed.
+func TestNoJobsAuditedIsVisibleInEveryFormat(t *testing.T) {
+	rep := sample()
+	rep.Coverage = engine.Coverage{Jobs: 0, JobControls: 5}
+
+	var table bytes.Buffer
+	if err := Write(&table, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(table.String(), "no job was evaluated") {
+		t.Errorf("the table should say no job was evaluated:\n%s", table.String())
+	}
+
+	var sarif bytes.Buffer
+	if err := Write(&sarif, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	var log struct {
+		Runs []struct {
+			Invocations []struct {
+				ExecutionSuccessful bool `json:"executionSuccessful"`
+			} `json:"invocations"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(sarif.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	if log.Runs[0].Invocations[0].ExecutionSuccessful {
+		t.Error("a run that judged no job did not execute successfully")
+	}
+
+	var js bytes.Buffer
+	if err := Write(&js, rep, Options{Format: FormatJSON}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(js.String(), `"jobControls": 5`) {
+		t.Errorf("the JSON report should carry the coverage:\n%s", js.String())
+	}
+}

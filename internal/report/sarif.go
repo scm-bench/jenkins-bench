@@ -175,8 +175,15 @@ func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
 	for _, e := range rep.Errors {
 		notifications = append(notifications, sarifNotification{Level: "error", Message: sarifText{Text: e}})
 	}
+	// A run with no job to judge produces a SARIF file with no job results —
+	// which a code-scanning dashboard shows as every job alert fixed.
+	if rep.Coverage.NoJobsAudited() {
+		notifications = append(notifications, sarifNotification{Level: "error", Message: sarifText{
+			Text: "No job was evaluated, so nothing job-scope was audited; a token without Job/Read is shown an empty job list.",
+		}})
+	}
 	run.Invocations = []sarifInvocation{{
-		ExecutionSuccessful:        len(rep.Errors) == 0,
+		ExecutionSuccessful:        len(rep.Errors) == 0 && !rep.Coverage.NoJobsAudited(),
 		ToolExecutionNotifications: notifications,
 	}}
 
