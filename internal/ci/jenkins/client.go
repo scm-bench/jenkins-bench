@@ -99,8 +99,12 @@ func NewClient(opts Options) (*Client, error) {
 	}
 
 	return &Client{
-		baseURL:    u,
-		httpClient: &http.Client{Timeout: timeout, Transport: transport},
+		baseURL: u,
+		httpClient: &http.Client{
+			Timeout:       timeout,
+			Transport:     transport,
+			CheckRedirect: checkRedirect,
+		},
 		username:   opts.Username,
 		token:      opts.Token,
 		maxRetries: opts.MaxRetries,
@@ -148,30 +152,31 @@ func IsForbidden(err error) bool {
 
 // GetJSON reads path and decodes the response into out.
 func (c *Client) GetJSON(ctx context.Context, path string, out any) error {
-	body, _, err := c.raw(ctx, path, true)
+	_, err := c.GetJSONHeaders(ctx, path, out)
+	return err
+}
+
+// GetJSONHeaders is GetJSON that also returns the response headers — of a
+// refusal as well as of a success, because a controller stamps its version on
+// both.
+func (c *Client) GetJSONHeaders(ctx context.Context, path string, out any) (http.Header, error) {
+	body, headers, err := c.raw(ctx, path, true)
 	if err != nil {
-		return err
+		return headers, err
 	}
 	if out == nil {
-		return nil
+		return headers, nil
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("GET %s: decode response: %w", path, err)
+		return headers, fmt.Errorf("GET %s: decode response: %w", path, err)
 	}
-	return nil
+	return headers, nil
 }
 
 // GetRaw reads path and returns the body undecoded, for config.xml.
 func (c *Client) GetRaw(ctx context.Context, path string) ([]byte, error) {
 	body, _, err := c.raw(ctx, path, true)
 	return body, err
-}
-
-// Head reads path only for its response headers. Used for the version, which
-// arrives as X-Jenkins on any response including the login page.
-func (c *Client) Head(ctx context.Context, path string) (http.Header, error) {
-	_, headers, err := c.raw(ctx, path, true)
-	return headers, err
 }
 
 // ProbeAnonymous issues path with no credentials — the only way to answer
@@ -236,6 +241,12 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 				return nil, nil, ctx.Err()
 			}
 			c.emit(req.Method, path, 0, time.Since(started), attempt, err)
+			// Nor is a redirect this client refused to follow: the next
+			// attempt would be refused the same way.
+			var refused *redirectError
+			if errors.As(err, &refused) {
+				return nil, nil, refused
+			}
 			lastErr = fmt.Errorf("GET %s: %w", path, err)
 			continue
 		}
@@ -291,6 +302,77 @@ func (c *Client) warnf(format string, args ...any) {
 	if c.Warnf != nil {
 		c.Warnf(format, args...)
 	}
+}
+
+// maxRedirects bounds how many same-origin redirects one request follows.
+const maxRedirects = 5
+
+// redirectError is a redirect the client refused to follow.
+type redirectError struct {
+	from, to *url.URL
+	reason   string
+}
+
+func (e *redirectError) Error() string {
+	return fmt.Sprintf("refusing to follow a redirect from %s to %s: %s",
+		displayURL(e.from), displayURL(e.to), e.reason)
+}
+
+// checkRedirect follows a redirect only within the origin the scan was
+// pointed at.
+//
+// net/http re-sends the Authorization header across a redirect to the same
+// host whatever the scheme, so an https controller answering 302 with an
+// http:// Location — a TLS-terminating proxy that rewrites it, an SSO realm
+// bouncing the first request — had the token sent in cleartext on the next hop,
+// past the cleartext refusal that guards --url. A redirect to another host or
+// port is refused too: the credential was handed over for one controller.
+// Within the origin a redirect is harmless and followed, a bounded number of
+// times.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	from, to := via[0].URL, req.URL
+	if !sameOrigin(from, to) {
+		if strings.EqualFold(from.Scheme, "https") && strings.EqualFold(to.Scheme, "http") {
+			return &redirectError{from: from, to: to,
+				reason: "it would send the token in cleartext; point --url at the address the controller serves over https"}
+		}
+		return &redirectError{from: from, to: to,
+			reason: "it leads to a different origin, and the token was given for this one; point --url at the address the controller answers on"}
+	}
+	if len(via) >= maxRedirects {
+		return &redirectError{from: from, to: to, reason: fmt.Sprintf("stopped after %d redirects", maxRedirects)}
+	}
+	return nil
+}
+
+// sameOrigin compares scheme, host and port, with the scheme's default port
+// filled in.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+// displayURL renders a URL for an error message: no userinfo, no query.
+func displayURL(u *url.URL) string {
+	shown := *u
+	shown.User = nil
+	shown.RawQuery = ""
+	shown.Fragment = ""
+	return shown.String()
 }
 
 func checkTransport(u *url.URL, allowPlaintext bool) error {

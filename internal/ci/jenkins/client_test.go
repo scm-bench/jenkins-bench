@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -359,5 +360,134 @@ func TestEncodedPathsSurviveURLConstruction(t *testing.T) {
 	}
 	if seen != "/job/Team%20A/job/Case%2001/api/json" {
 		t.Errorf("path = %s", seen)
+	}
+}
+
+// An https controller redirecting to http on the same host — the shape of a
+// TLS-terminating proxy that rewrites Location headers — made Go's client
+// follow it and re-send the Authorization header in cleartext: net/http keeps
+// credentials across a redirect to the same host whatever the scheme. The
+// first request a scan makes is authenticated, so the token went out on the
+// first hop, past the cleartext refusal that guards --url.
+func TestClientRefusesAnHTTPSToHTTPRedirect(t *testing.T) {
+	var sawAuthOnPlain atomic.Bool
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawAuthOnPlain.Store(true)
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer secure.Close()
+
+	c, err := NewClient(Options{BaseURL: secure.URL, Username: "u", Token: "s3cret", Insecure: true, MaxRetries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.GetJSON(context.Background(), "/api/json", nil)
+	if sawAuthOnPlain.Load() {
+		t.Fatal("the token was sent over plain http after a redirect")
+	}
+	if err == nil {
+		t.Fatal("a downgrade redirect must be an error, not a followed hop")
+	}
+	for _, want := range []string{"https://", "http://", "cleartext"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should name both URLs and why: %v", err)
+		}
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("the error carries the token: %v", err)
+	}
+}
+
+// A redirect to another host or port is never followed: the credential was
+// handed to the scan for one controller.
+func TestClientRefusesACrossOriginRedirect(t *testing.T) {
+	var reached atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		w.Write([]byte(`{}`))
+	}))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/sso/login", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	c, _ := NewClient(Options{BaseURL: origin.URL, Username: "u", Token: "t", MaxRetries: 2})
+	err := c.GetJSON(context.Background(), "/api/json", nil)
+	if err == nil {
+		t.Fatal("a cross-origin redirect must be an error")
+	}
+	if reached.Load() {
+		t.Error("the redirect was followed to another origin")
+	}
+	if !strings.Contains(err.Error(), "different origin") {
+		t.Errorf("the error should say why: %v", err)
+	}
+}
+
+// Within the origin a redirect is harmless and followed — with the
+// credential, a bounded number of times.
+func TestClientFollowsASameOriginRedirect(t *testing.T) {
+	var hops atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/old/api/json":
+			http.Redirect(w, r, "/api/json", http.StatusMovedPermanently)
+		case "/loop":
+			hops.Add(1)
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		default:
+			if r.Header.Get("Authorization") == "" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := c.GetJSON(context.Background(), "/old/api/json", &out); err != nil || !out.OK {
+		t.Fatalf("a same-origin redirect should be followed with the credential: %v %+v", err, out)
+	}
+	if err := c.GetJSON(context.Background(), "/loop", nil); err == nil {
+		t.Error("a redirect loop must end in an error")
+	}
+	if n := hops.Load(); n > 6 {
+		t.Errorf("followed %d redirects; the limit is 5", n)
+	}
+}
+
+func TestSameOrigin(t *testing.T) {
+	parse := func(s string) *url.URL {
+		u, err := url.Parse(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"https://j.example.com/x", "https://j.example.com:443/y", true},
+		{"http://j.example.com/x", "http://J.EXAMPLE.COM:80/y", true},
+		{"https://j.example.com/x", "http://j.example.com/x", false},
+		{"https://j.example.com/x", "https://j.example.com:8443/x", false},
+		{"https://j.example.com/x", "https://sso.example.com/x", false},
+	}
+	for _, tc := range cases {
+		if got := sameOrigin(parse(tc.a), parse(tc.b)); got != tc.want {
+			t.Errorf("sameOrigin(%s, %s) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
 	}
 }

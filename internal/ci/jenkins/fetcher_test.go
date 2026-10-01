@@ -56,7 +56,9 @@ func (s *stand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.paths = append(s.paths, full)
 	s.mu.Unlock()
 
-	if _, _, ok := r.BasicAuth(); !ok && r.URL.Path != "/login" {
+	// A controller stamps its version on every response, refusals included.
+	w.Header().Set("X-Jenkins", "2.541.2")
+	if _, _, ok := r.BasicAuth(); !ok {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -95,7 +97,6 @@ func (s *stand) requested(path string) bool {
 // hardened wires a stand-in returning a well-configured controller.
 func hardened(t *testing.T) *stand {
 	s := newStand(t)
-	s.handlers["/login"] = standResponse{headers: map[string]string{"X-Jenkins": "2.541.2"}}
 	s.handlers["/api/json"] = standResponse{body: `{
 		"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"slaveAgentPort":-1,
 		"jobs":[{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"}]}`}
@@ -942,5 +943,21 @@ func TestSnapshotHoldsNoCredentialsFromURLs(t *testing.T) {
 		!strings.Contains(string(encoded), "https://gitlab.example.com/a/b.git") ||
 		!strings.Contains(string(encoded), "git.example.com:acme/app.git") {
 		t.Errorf("the remotes should survive without their credentials: %s", encoded)
+	}
+}
+
+// The version comes from the instance API's own response — a 403 carries it
+// too — and no longer from an authenticated GET of /login made first: the
+// page an SSO realm redirects, and so the likeliest request to meet an https
+// to http bounce with the token attached.
+func TestFetcherReadsTheVersionWithoutVisitingTheLoginPage(t *testing.T) {
+	s := hardened(t)
+	s.forbidden = []string{"/api/json"}
+	snap := fetchFrom(t, s)
+	if snap.Controller.Version != "2.541.2" {
+		t.Errorf("version = %q, want it read off the refusal", snap.Controller.Version)
+	}
+	if s.requested("/login") {
+		t.Error("the fetcher requested /login")
 	}
 }

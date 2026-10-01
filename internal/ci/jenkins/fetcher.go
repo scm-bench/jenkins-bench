@@ -119,15 +119,17 @@ func (f *Fetcher) Fetch(ctx context.Context) (*ci.Snapshot, error) {
 func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 	c := &ci.Controller{Available: map[string]bool{}}
 
-	// The version arrives as a response header on any page, including one that
-	// needs no credentials, so it is knowable even when everything else is not.
-	if headers, err := f.client.Head(ctx, "/login"); err == nil {
+	var inst instance
+	headers, err := f.client.GetJSONHeaders(ctx, "/api/json", &inst)
+	c.Available[AvailRoot] = err == nil
+	// The version arrives as a response header on every response, a refusal
+	// included, so it is knowable even when nothing else is. It used to come
+	// from a GET of /login made first, with credentials attached — the page an
+	// SSO realm redirects, and the request most likely to meet an https to
+	// http bounce. One request fewer, and that one gone.
+	if headers != nil {
 		c.Version = headers.Get("X-Jenkins")
 	}
-
-	var inst instance
-	err := f.client.GetJSON(ctx, "/api/json", &inst)
-	c.Available[AvailRoot] = err == nil
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return nil, ctx.Err()
