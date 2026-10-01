@@ -138,6 +138,23 @@ if [ "$status" -ne 2 ] || ! grep -q 'Job/Read' "$OUT/nojob.stderr"; then
 else
   echo "[nojob] exit 2: no job was evaluated"
 fi
+# And the reports say so themselves, for a CI view that draws them without
+# reading the exit code: its controller test cases can all pass.
+scan nojob -o sarif --output-file "$OUT/nojob.sarif" 2>/dev/null || true
+scan nojob -o junit --output-file "$OUT/nojob.xml" 2>/dev/null || true
+if ! python3 - "$OUT/nojob.sarif" "$OUT/nojob.xml" <<'EOF'; then
+import json, sys
+import xml.etree.ElementTree as ET
+sarif = json.load(open(sys.argv[1]))
+assert sarif["runs"][0]["invocations"][0]["executionSuccessful"] is False, "SARIF says the run succeeded"
+cases = ET.parse(sys.argv[2]).getroot().iter("testcase")
+assert any(c.get("name") == "jobs" and c.get("classname") == "scan.coverage" and c.find("failure") is not None
+           for c in cases), "JUnit has no failing scan.coverage case for the jobs"
+EOF
+  fail "[nojob] the SARIF or JUnit report reads as a clean run"
+else
+  echo "[nojob] SARIF marks the run unsuccessful; JUnit fails scan.coverage/jobs"
+fi
 
 # resources prints the job resources a JSON report holds, one per line.
 resources() {

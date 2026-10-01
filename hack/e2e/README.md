@@ -20,7 +20,9 @@ controller:
 - no secret planted in `casc.yaml` (every string containing `e2e-planted`)
   reaches a snapshot, a report or the trace;
 - reports and snapshots are written `0600`;
-- a token without `Job/Read` makes the scan exit 2 rather than pass;
+- a token without `Job/Read` makes the scan exit 2 rather than pass — and its
+  SARIF and JUnit reports say so themselves, since a CI view drawing them does
+  not read the exit code;
 - `--folder` and `--job` narrow the scan — including a name that needs
   percent-encoding and a branch job whose name carries an encoded slash —
   and a target that does not exist exits 2, naming it.
