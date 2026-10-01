@@ -1151,3 +1151,31 @@ func TestFetcherStopsAtAnImplausibleDepth(t *testing.T) {
 		t.Error("a walk cut short is an incomplete job list")
 	}
 }
+
+// Three things a controller can serve that the decoder refused, each turning
+// a readable job into a MANUAL one: a byte-order mark before the XML 1.1
+// declaration (which hid the declaration from the 1.1-to-1.0 rewrite), an
+// ISO-8859-1 declaration, and XML 1.1's character references to control
+// characters — what XStream writes for an ANSI escape in a description.
+func TestDecodeJobConfigReadsWhatJenkinsWrites(t *testing.T) {
+	cases := map[string]string{
+		"byte-order mark":  "\xef\xbb\xbf<?xml version='1.1' encoding='UTF-8'?><project><authToken>t</authToken></project>",
+		"ISO-8859-1":       "<?xml version='1.1' encoding='ISO-8859-1'?><project><description>caf\xe9</description><authToken>t</authToken></project>",
+		"control char ref": "<?xml version='1.1' encoding='UTF-8'?><project><description>&#x1b;[31mred&#27;&#x7;</description><authToken>t</authToken></project>",
+	}
+	for name, body := range cases {
+		cfg, err := decodeJobConfig([]byte(body))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if cfg.XMLName.Local != "project" || cfg.AuthToken == nil {
+			t.Errorf("%s: decoded %+v", name, cfg)
+		}
+	}
+	// A declaration in an encoding nobody decodes is still an error, recorded
+	// on the job, rather than a guess.
+	if _, err := decodeJobConfig([]byte(`<?xml version='1.0' encoding='EBCDIC-CP-US'?><project/>`)); err == nil {
+		t.Error("an encoding the decoder cannot read must be an error")
+	}
+}

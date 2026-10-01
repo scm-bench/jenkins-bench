@@ -1,13 +1,16 @@
 package jenkins
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -539,17 +542,71 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 // xmlDeclaration matches a leading XML declaration and captures its version.
 var xmlDeclaration = regexp.MustCompile(`^(\s*<\?xml\s[^?]*?version\s*=\s*['"])([0-9.]+)(['"])`)
 
-// decodeJobConfig parses a job's config.xml, rewriting the XML 1.1 declaration
-// Jenkins emits on every save to 1.0: Go's encoding/xml rejects 1.1 outright,
-// which made every saved job unreadable. Only the version is touched — a
-// document with 1.1-only content still fails, as a recorded parse error.
+// controlCharRef matches a numeric character reference, decimal or hex.
+var controlCharRef = regexp.MustCompile(`&#(x[0-9a-fA-F]+|[0-9]+);`)
+
+// utf8BOM is the byte-order mark some editors and proxies put in front.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// decodeJobConfig parses a job's config.xml.
+//
+// Go's encoding/xml reads XML 1.0, and Jenkins writes 1.1 whenever it saves a
+// job, so three things are smoothed over first — each of which used to turn a
+// readable job into a MANUAL one:
+//
+//   - the 1.1 declaration is rewritten to 1.0, after a byte-order mark is
+//     dropped (one in front hid the declaration from the rewrite);
+//   - character references to C0 control characters, legal in 1.1 and how
+//     XStream writes an ANSI escape in a description, become U+FFFD — no
+//     field this fetcher reads can hold one meaningfully;
+//   - an ISO-8859-1 or US-ASCII declaration is decoded rather than refused.
+//
+// Anything else 1.1 permits and 1.0 does not still fails, as a recorded parse
+// error rather than a guess.
 func decodeJobConfig(body []byte) (*jobConfig, error) {
+	body = bytes.TrimPrefix(body, utf8BOM)
 	body = xmlDeclaration.ReplaceAll(body, []byte(`${1}1.0${3}`))
+	body = controlCharRef.ReplaceAllFunc(body, func(ref []byte) []byte {
+		digits := string(ref[2 : len(ref)-1])
+		base := 10
+		if digits[0] == 'x' {
+			digits, base = digits[1:], 16
+		}
+		n, err := strconv.ParseUint(digits, base, 32)
+		if err != nil || n == 0 || n > 0x1F || n == '\t' || n == '\n' || n == '\r' {
+			return ref
+		}
+		return []byte("&#xFFFD;")
+	})
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder.CharsetReader = charsetReader
 	var cfg jobConfig
-	if err := xml.Unmarshal(body, &cfg); err != nil {
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// charsetReader decodes the single-byte encodings a config.xml declaration
+// has been seen to name. Every byte of ISO-8859-1 is the code point of the
+// same number, so the conversion is a loop; US-ASCII is its subset.
+func charsetReader(charset string, input io.Reader) (io.Reader, error) {
+	switch strings.ToLower(charset) {
+	case "utf-8", "utf8":
+		return input, nil
+	case "iso-8859-1", "iso8859-1", "latin1", "latin-1", "us-ascii", "ascii":
+		raw, err := io.ReadAll(input)
+		if err != nil {
+			return nil, err
+		}
+		var b strings.Builder
+		b.Grow(len(raw))
+		for _, c := range raw {
+			b.WriteRune(rune(c))
+		}
+		return strings.NewReader(b.String()), nil
+	}
+	return nil, fmt.Errorf("the configuration declares encoding %q, which this scan does not decode", charset)
 }
 
 // applyConfig extracts booleans, counts and class names — nothing else. The
