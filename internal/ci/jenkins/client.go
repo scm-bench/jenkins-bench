@@ -22,10 +22,13 @@ import (
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
-	username   string
-	token      string
-	maxRetries int
-	onRequest  func(RequestEvent)
+	// probeClient sends the unauthenticated probe. It follows no redirect at
+	// all; see ProbeAnonymous.
+	probeClient *http.Client
+	username    string
+	token       string
+	maxRetries  int
+	onRequest   func(RequestEvent)
 
 	// Logf receives progress detail. Nil means silent.
 	Logf func(format string, args ...any)
@@ -115,6 +118,13 @@ func NewClient(opts Options) (*Client, error) {
 			Transport:     transport,
 			CheckRedirect: checkRedirect,
 		},
+		probeClient: &http.Client{
+			Timeout:   timeout,
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		username:   opts.Username,
 		token:      opts.Token,
 		maxRetries: opts.MaxRetries,
@@ -189,20 +199,58 @@ func (c *Client) GetRaw(ctx context.Context, path string) ([]byte, error) {
 	return body, err
 }
 
+// Probe is what an unauthenticated request for the instance API got back.
+type Probe struct {
+	// Allowed is whether an anonymous client was served the Jenkins API.
+	Allowed bool
+	// Conclusive is false when the answer settles nothing either way. A
+	// probe that never ran, or was sent somewhere else, is not a denial.
+	Conclusive bool
+	// Reason says why an inconclusive probe is one.
+	Reason string
+}
+
+// classHudson is the _class of the controller's root object, which is what an
+// answer from the Jenkins API says it is.
+const classHudson = "hudson.model.Hudson"
+
 // ProbeAnonymous issues path with no credentials — the only way to answer
 // "can an unauthenticated client read this?", since the authorization strategy
-// is not exposed. conclusive is false on transport errors: a probe that never
-// ran is not a denial.
-func (c *Client) ProbeAnonymous(ctx context.Context, path string) (allowed, conclusive bool) {
-	_, _, err := c.raw(ctx, path, false)
-	if err == nil {
-		return true, true
+// is not exposed.
+//
+// Only the Jenkins API itself counts as access: a 200 whose body is the root
+// object. Behind an authenticating proxy an unauthenticated request is
+// redirected to a sign-in page that answers 200, and the probe used to follow
+// the redirect and take that 200 for the API — a HIGH failure, "anyone can
+// read this controller", on one nobody can reach without signing in. It now
+// follows no redirect: a 401 or 403 is a denial; a redirect, or a 200 that is
+// not the API, settles nothing, and the control says so instead of guessing.
+func (c *Client) ProbeAnonymous(ctx context.Context, path string) Probe {
+	body, headers, err := c.raw(ctx, path, false)
+	status := Status(err)
+	switch {
+	case err == nil:
+		var root struct {
+			Class string `json:"_class"`
+		}
+		if json.Unmarshal(body, &root) == nil && root.Class == classHudson {
+			return Probe{Allowed: true, Conclusive: true}
+		}
+		return Probe{Reason: "an unauthenticated request was answered with something other than the Jenkins API, such as a sign-in page"}
+	case status == http.StatusForbidden || status == http.StatusUnauthorized:
+		return Probe{Conclusive: true}
+	case status >= 300 && status < 400:
+		where := "elsewhere"
+		if headers != nil {
+			if loc, perr := url.Parse(headers.Get("Location")); perr == nil && headers.Get("Location") != "" {
+				where = displayURL(c.baseURL.ResolveReference(loc))
+			}
+		}
+		return Probe{Reason: fmt.Sprintf("an unauthenticated request was redirected to %s rather than answered; "+
+			"if that is a sign-in page, anonymous users cannot reach the controller", where)}
+	default:
+		return Probe{Reason: fmt.Sprintf("the unauthenticated request failed (%v)", err)}
 	}
-	switch Status(err) {
-	case http.StatusForbidden, http.StatusUnauthorized:
-		return false, true
-	}
-	return false, false
 }
 
 // raw issues a GET and returns the body and response headers, retrying
@@ -239,12 +287,16 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 			return nil, nil, fmt.Errorf("build request for %s: %w", path, err)
 		}
 		req.Header.Set("Accept", "application/json, text/xml, */*")
-		if authenticate && c.username != "" {
-			req.SetBasicAuth(c.username, c.token)
+		client := c.probeClient
+		if authenticate {
+			client = c.httpClient
+			if c.username != "" {
+				req.SetBasicAuth(c.username, c.token)
+			}
 		}
 
 		started := time.Now()
-		resp, err := c.httpClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			// Transport errors are worth retrying; a cancelled context is not.
 			if ctx.Err() != nil {

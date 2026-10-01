@@ -38,7 +38,7 @@ func controllerWithJobs(t *testing.T, anonymousAllowed bool, jobs string) *httpt
 // test's own, which win over the stand-in's.
 func controllerServing(t *testing.T, anonymousAllowed bool, jobs string, extra map[string]http.HandlerFunc) *httptest.Server {
 	t.Helper()
-	instanceBody := `{"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"jobs":[` + jobs + `]}`
+	instanceBody := `{"_class":"hudson.model.Hudson","mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"jobs":[` + jobs + `]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("the scan issued a %s to %s", r.Method, r.URL.Path)
@@ -694,5 +694,35 @@ func TestScanJudgesAMultibranchProjectByItsFactory(t *testing.T) {
 		if got[key] != want {
 			t.Errorf("%s = %q, want %s", key, got[key], want)
 		}
+	}
+}
+
+// Behind an authenticating proxy, an unauthenticated request is redirected to
+// a sign-in page that answers 200. The anonymous probe followed the redirect,
+// took the 200 for the Jenkins API, and CIS-2.1.6 reported a HIGH failure —
+// "an unauthenticated client can read this controller" — on a controller
+// nobody can reach without signing in. exit 1, for a false FAIL.
+func TestScanDoesNotTakeASignInPageForAnonymousAccess(t *testing.T) {
+	signIn := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html><body>Sign in with SSO</body></html>")
+	}
+	instance := `{"_class":"hudson.model.Hudson","mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"jobs":[` + hardenedJob + `]}`
+	srv := controllerServing(t, false, hardenedJob, map[string]http.HandlerFunc{
+		"/oauth2/sign_in": signIn,
+		"/api/json": func(w http.ResponseWriter, r *http.Request) {
+			if _, _, ok := r.BasicAuth(); !ok {
+				http.Redirect(w, r, "/oauth2/sign_in?rd=%2Fapi%2Fjson", http.StatusFound)
+				return
+			}
+			fmt.Fprint(w, instance)
+		},
+	})
+	got, err := verdicts(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t")
+	if got["CIS-2.1.6 controller"] == "FAIL" {
+		t.Fatalf("a sign-in page is not anonymous access: CIS-2.1.6 FAIL (%v)", err)
+	}
+	if got["CIS-2.1.6 controller"] != "MANUAL" {
+		t.Errorf("CIS-2.1.6 = %q, want MANUAL: the probe was redirected, not answered", got["CIS-2.1.6 controller"])
 	}
 }

@@ -168,10 +168,11 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 	}
 
 	// Measured, not read. See ProbeAnonymous.
-	allowed, conclusive := f.client.ProbeAnonymous(ctx, "/api/json?tree=useSecurity")
-	c.Security.AnonymousRead, c.Security.AnonymousReadKnown = allowed, conclusive
-	if !conclusive {
-		c.Errors = append(c.Errors, "the unauthenticated probe did not reach a conclusion")
+	probe := f.client.ProbeAnonymous(ctx, "/api/json?tree=useSecurity")
+	c.Security.AnonymousRead, c.Security.AnonymousReadKnown = probe.Allowed, probe.Conclusive
+	if !probe.Conclusive {
+		c.Errors = append(c.Errors, "the unauthenticated probe did not reach a conclusion: "+probe.Reason)
+		f.warn("whether anonymous users can read the controller is unknown: %s", probe.Reason)
 	}
 
 	f.fetchNodes(ctx, c)

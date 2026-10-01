@@ -97,7 +97,7 @@ func (s *stand) requested(path string) bool {
 // hardened wires a stand-in returning a well-configured controller.
 func hardened(t *testing.T) *stand {
 	s := newStand(t)
-	s.handlers["/api/json"] = standResponse{body: `{
+	s.handlers["/api/json"] = standResponse{body: `{"_class":"hudson.model.Hudson",
 		"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"slaveAgentPort":-1,
 		"jobs":[{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"}]}`}
 	s.handlers["/computer/api/json"] = standResponse{body: `{"computer":[

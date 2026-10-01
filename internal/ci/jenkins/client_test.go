@@ -177,7 +177,7 @@ func TestClientHonoursContextCancellation(t *testing.T) {
 // report PASS on a controller nobody checked.
 func TestProbeAnonymousDistinguishesDenialFromFailure(t *testing.T) {
 	allowed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{}`))
+		w.Write([]byte(`{"_class":"hudson.model.Hudson","useSecurity":true}`))
 	}))
 	defer allowed.Close()
 	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,13 +186,13 @@ func TestProbeAnonymousDistinguishesDenialFromFailure(t *testing.T) {
 	defer denied.Close()
 
 	c, _ := NewClient(Options{BaseURL: allowed.URL})
-	if ok, conclusive := c.ProbeAnonymous(context.Background(), "/api/json"); !ok || !conclusive {
-		t.Errorf("a 200 means anonymous read: ok=%v conclusive=%v", ok, conclusive)
+	if p := c.ProbeAnonymous(context.Background(), "/api/json"); !p.Allowed || !p.Conclusive {
+		t.Errorf("the Jenkins API served anonymously is anonymous read: %+v", p)
 	}
 
 	c, _ = NewClient(Options{BaseURL: denied.URL})
-	if ok, conclusive := c.ProbeAnonymous(context.Background(), "/api/json"); ok || !conclusive {
-		t.Errorf("a 403 is a conclusion: ok=%v conclusive=%v", ok, conclusive)
+	if p := c.ProbeAnonymous(context.Background(), "/api/json"); p.Allowed || !p.Conclusive {
+		t.Errorf("a 403 is a conclusion: %+v", p)
 	}
 
 	// Nothing listening: not a denial.
@@ -200,8 +200,49 @@ func TestProbeAnonymousDistinguishesDenialFromFailure(t *testing.T) {
 	url := unreachable.URL
 	unreachable.Close()
 	c, _ = NewClient(Options{BaseURL: url, Timeout: 200 * time.Millisecond})
-	if ok, conclusive := c.ProbeAnonymous(context.Background(), "/api/json"); ok || conclusive {
-		t.Errorf("an unreachable controller is not a denial: ok=%v conclusive=%v", ok, conclusive)
+	if p := c.ProbeAnonymous(context.Background(), "/api/json"); p.Allowed || p.Conclusive || p.Reason == "" {
+		t.Errorf("an unreachable controller is not a denial, and says why: %+v", p)
+	}
+}
+
+// Behind an authenticating proxy an unauthenticated request is redirected to a
+// sign-in page that answers 200. The probe used to follow it and take the 200
+// for the Jenkins API. It follows nothing now, and neither a redirect nor a
+// page that is not the API settles anything.
+func TestProbeAnonymousTakesOnlyTheAPIForAccess(t *testing.T) {
+	var signInHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sso/login", func(w http.ResponseWriter, r *http.Request) {
+		signInHits.Add(1)
+		w.Write([]byte("<html>Sign in with SSO</html>"))
+	})
+	mux.HandleFunc("/api/json", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/sso/login?rd=%2Fapi%2Fjson", http.StatusFound)
+	})
+	mux.HandleFunc("/page", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html>Welcome</html>"))
+	})
+	mux.HandleFunc("/other-json", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"_class":"some.proxy.Status"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	p := c.ProbeAnonymous(context.Background(), "/api/json")
+	if p.Allowed || p.Conclusive {
+		t.Errorf("a redirect settles nothing: %+v", p)
+	}
+	if signInHits.Load() != 0 {
+		t.Error("the probe followed the redirect")
+	}
+	if !strings.Contains(p.Reason, "/sso/login") || strings.Contains(p.Reason, "rd=") {
+		t.Errorf("the reason should name where it was sent, without the query: %q", p.Reason)
+	}
+	for _, path := range []string{"/page", "/other-json"} {
+		if p := c.ProbeAnonymous(context.Background(), path); p.Allowed || p.Conclusive {
+			t.Errorf("%s is not the Jenkins API: %+v", path, p)
+		}
 	}
 }
 
@@ -218,7 +259,7 @@ func TestProbeAnonymousSendsNoCredentials(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
-	c.ProbeAnonymous(context.Background(), "/api/json")
+	_ = c.ProbeAnonymous(context.Background(), "/api/json")
 	if sawAuth.Load() {
 		t.Error("the anonymous probe sent an Authorization header")
 	}
