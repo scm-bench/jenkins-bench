@@ -116,3 +116,21 @@ func TestSortFindingsOrdersBenchmarkNumbersNumerically(t *testing.T) {
 		}
 	}
 }
+
+// The score is floored, never rounded: one failing finding among hundreds of
+// passes must not print a perfect 100. 1510 of 1512 is 99.87 — 100 when
+// rounded, which is the score of a controller with nothing wrong.
+func TestScoreIsFlooredSoAFailureNeverReadsAsPerfect(t *testing.T) {
+	var findings []Finding
+	for i := 0; i < 503; i++ {
+		findings = append(findings, finding("HIGH", StatusPass))
+	}
+	findings = append(findings, finding("LOW", StatusPass), finding("MEDIUM", StatusFail))
+	score := Compute(findings)
+	if score.EarnedWeight != 1510 || score.TotalWeight != 1512 {
+		t.Fatalf("weights = %d/%d, want 1510/1512", score.EarnedWeight, score.TotalWeight)
+	}
+	if score.Value != 99 {
+		t.Errorf("score = %d, want 99: a failing finding must never read as 100", score.Value)
+	}
+}

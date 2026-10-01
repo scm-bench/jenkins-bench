@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"math"
 	"strings"
 
 	"github.com/scm-bench/jenkins-bench/internal/checks"
@@ -76,7 +75,9 @@ func Compute(findings []Finding) Score {
 		score.Value = 0
 		return score
 	}
-	score.Value = int(math.Round(float64(score.EarnedWeight) / float64(score.TotalWeight) * 100))
+	// Floored, in integers: rounding made 1510 of 1512 print 100, the score
+	// of a controller with nothing wrong, while a finding was failing.
+	score.Value = score.EarnedWeight * 100 / score.TotalWeight
 	return score
 }
 
