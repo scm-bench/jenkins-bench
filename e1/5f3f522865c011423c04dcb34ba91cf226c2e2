@@ -1,0 +1,21 @@
+internal/cli/scan.go
+  s_48d8fa1c49bfb6::t_5ce522a44788b7 31,93,97-102,149-152,170,210-224
+internal/cli/scan_test.go
+  s_48d8fa1c49bfb6::t_b33a4cfa2edf1c 211,234,326,584,764-806
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e15f3f522865c011423c04dcb34ba91cf226c2e2",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
