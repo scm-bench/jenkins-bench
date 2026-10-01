@@ -1,0 +1,21 @@
+hack/e2e/README.md
+  s_48d8fa1c49bfb6::t_c4a973e51ec058 23-25
+hack/e2e/verify.sh
+  s_48d8fa1c49bfb6::t_9b17a1a74e6180 141-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b6b8c7cf6d028e4e37803313202b79127ab29efa",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
