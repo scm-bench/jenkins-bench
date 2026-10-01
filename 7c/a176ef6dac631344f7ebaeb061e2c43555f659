@@ -1,0 +1,23 @@
+internal/report/junit.go
+  s_48d8fa1c49bfb6::t_fc19904aad9daa 1-188
+internal/report/report.go
+  s_48d8fa1c49bfb6::t_73d4d65e8d417a 1-2,18,73,84-85
+internal/report/report_test.go
+  s_48d8fa1c49bfb6::t_f0c5728fba3d68 6,868-983
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7ca176ef6dac631344f7ebaeb061e2c43555f659",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
