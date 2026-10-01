@@ -168,6 +168,15 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 		if inst.NumExecutors != nil {
 			c.BuiltInNode.NumExecutors, c.BuiltInNode.NumExecutorsKnown = *inst.NumExecutors, true
 		}
+		if inst.Mode != nil && *inst.Mode != "" {
+			c.BuiltInNode.Mode, c.BuiltInNode.ModeKnown = *inst.Mode, true
+		}
+		if inst.AssignedLabels != nil {
+			for _, l := range *inst.AssignedLabels {
+				addLabel(&c.BuiltInNode, l.Name)
+			}
+			c.BuiltInNode.LabelsKnown = true
+		}
 	}
 
 	// Measured, not read. See ProbeAnonymous.
@@ -202,8 +211,9 @@ func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 				c.BuiltInNode.NumExecutors, c.BuiltInNode.NumExecutorsKnown = *n.NumExecutors, true
 			}
 			for _, l := range n.AssignedLabels {
-				c.BuiltInNode.Labels = append(c.BuiltInNode.Labels, l.Name)
+				addLabel(&c.BuiltInNode, l.Name)
 			}
+			c.BuiltInNode.LabelsKnown = true
 			continue
 		}
 		agent := ci.Agent{
@@ -463,6 +473,17 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 	return jobs, nil
 }
 
+// addLabel records one of the built-in node's labels once, whichever of the
+// two endpoints that carry them reported it.
+func addLabel(n *ci.BuiltInNode, name string) {
+	for _, existing := range n.Labels {
+		if existing == name {
+			return
+		}
+	}
+	n.Labels = append(n.Labels, name)
+}
+
 // builtInNodeLabels is every label that means "the controller": the well-known
 // pair (the node list may not have been readable) plus whatever the built-in
 // node actually reported — an operator can name it anything.
@@ -646,28 +667,56 @@ func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, doc jobDocument, cont
 		job.RunsOnBuiltInNodeKnown = false
 		return
 	}
-	if !controller.BuiltInNode.NumExecutorsKnown {
-		job.RunsOnBuiltInNodeKnown = false
-		return
-	}
+	job.RunsOnBuiltInNode, job.RunsOnBuiltInNodeKnown = placeJob(cfg, controller.BuiltInNode, builtInLabels)
+}
+
+// placeJob answers whether a project-type job can run on the built-in node,
+// by Jenkins' own rules — AbstractProject.getAssignedLabel and the node's
+// mode — and reports known=false wherever the data to apply them is missing.
+func placeJob(cfg *jobConfig, node ci.BuiltInNode, builtInLabels map[string]bool) (runs, known bool) {
 	assigned := strings.TrimSpace(cfg.AssignedNode)
+	canRoam := strings.TrimSpace(cfg.CanRoam)
 	switch {
-	case assigned != "" && isLabelExpression(assigned):
+	case canRoam == "true":
+		// No label restriction: the job runs wherever there is an executor.
+		// The built-in node takes it only with executors to offer, and only
+		// in NORMAL mode — EXCLUSIVE takes nothing that does not name it.
+		if !node.NumExecutorsKnown {
+			return false, false
+		}
+		if node.NumExecutors == 0 {
+			return false, true
+		}
+		if !node.ModeKnown {
+			return false, false
+		}
+		return !strings.EqualFold(node.Mode, "EXCLUSIVE"), true
+	case canRoam == "false" && assigned == "":
+		// Jenkins assigns a job that may not roam and names no node to the
+		// controller's own label: it is pinned there. v0.1 read it as running
+		// nowhere near the controller.
+		return true, true
+	case canRoam == "false" && isLabelExpression(assigned):
 		// <assignedNode> can hold a label expression — "built-in || linux",
 		// "!windows && x86" — and this fetcher does not evaluate those.
 		// Recording false for one would assert, as measured fact, that a job
-		// which may well run on the controller cannot; unknown is the honest
-		// answer, and the policy reports MANUAL from it.
-		job.RunsOnBuiltInNodeKnown = false
-		return
-	case assigned != "":
-		job.RunsOnBuiltInNode = builtInLabels[strings.ToLower(assigned)]
+		// which may well run on the controller cannot.
+		return false, false
+	case canRoam == "false":
+		if builtInLabels[strings.ToLower(assigned)] {
+			return true, true
+		}
+		// Not one of the built-in node's labels — if they could be read at
+		// all. Otherwise only the two well-known names can be placed.
+		if !node.LabelsKnown {
+			return false, false
+		}
+		return false, true
 	default:
-		// No label restriction: the job runs wherever there is an executor,
-		// which includes the controller when it has any.
-		job.RunsOnBuiltInNode = cfg.CanRoam == "true" && controller.BuiltInNode.NumExecutors > 0
+		// No <canRoam> in the document at all: not a shape Jenkins writes
+		// for these job types, so nothing is assumed about it.
+		return false, false
 	}
-	job.RunsOnBuiltInNodeKnown = true
 }
 
 // isLabelExpression reports whether an <assignedNode> value is a label

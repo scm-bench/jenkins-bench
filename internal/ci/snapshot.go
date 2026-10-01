@@ -98,6 +98,14 @@ type BuiltInNode struct {
 	// controller exactly as one pinned to "built-in" does. Resolving where a
 	// job runs against a hard-coded pair would have missed every such job.
 	Labels []string `json:"labels,omitempty"`
+	// LabelsKnown is whether Labels was read, from the instance API or the
+	// node list. Without it a job pinned to a label other than the two
+	// well-known names cannot be placed.
+	LabelsKnown bool `json:"labelsKnown"`
+	// Mode is NORMAL — the node takes any job that may roam — or EXCLUSIVE,
+	// only jobs whose label expression names it. ModeKnown says it was read.
+	Mode      string `json:"mode,omitempty"`
+	ModeKnown bool   `json:"modeKnown"`
 }
 
 // Agent is one node attached to the controller.

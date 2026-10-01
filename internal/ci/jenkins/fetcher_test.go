@@ -1179,3 +1179,65 @@ func TestDecodeJobConfigReadsWhatJenkinsWrites(t *testing.T) {
 		t.Error("an encoding the decoder cannot read must be an error")
 	}
 }
+
+// placement fetches the hardened freestyle job with the given config.xml body
+// and root API, and returns where the fetcher says it runs.
+func placement(t *testing.T, root, config string, computerStatus int) (runs, known bool) {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: root}
+	if computerStatus != 0 {
+		s.handlers["/computer/api/json"] = standResponse{status: computerStatus, body: `oops`}
+	}
+	s.handlers["/job/build/config.xml"] = standResponse{body: config}
+	job := fetchFrom(t, s).Jobs[0]
+	return job.RunsOnBuiltInNode, job.RunsOnBuiltInNodeKnown
+}
+
+const twoExecutors = `{"_class":"hudson.model.Hudson","mode":"NORMAL","numExecutors":2,"useSecurity":true,"useCrumbs":true,
+	"assignedLabels":[{"name":"built-in"}],"jobs":[{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/"}]}`
+
+// AbstractProject.getAssignedLabel: a job that may not roam and names no node
+// is assigned the controller's own label. v0.1 recorded it as not running on
+// the controller.
+func TestRunsOnBuiltInNodeWhenPinnedWithoutANode(t *testing.T) {
+	runs, known := placement(t, twoExecutors, `<project><canRoam>false</canRoam></project>`, 0)
+	if !runs || !known {
+		t.Errorf("runs=%v known=%v; canRoam=false with no assignedNode is the built-in node", runs, known)
+	}
+}
+
+// A built-in node in EXCLUSIVE mode takes only jobs whose label names it, so a
+// roaming job does not run there whatever its executor count.
+func TestRunsOnBuiltInNodeHonoursExclusiveMode(t *testing.T) {
+	exclusive := strings.Replace(twoExecutors, `"mode":"NORMAL"`, `"mode":"EXCLUSIVE"`, 1)
+	if runs, known := placement(t, exclusive, `<project><canRoam>true</canRoam></project>`, 0); runs || !known {
+		t.Errorf("runs=%v known=%v; a roaming job does not run on an EXCLUSIVE built-in node", runs, known)
+	}
+	if runs, known := placement(t, twoExecutors, `<project><canRoam>true</canRoam></project>`, 0); !runs || !known {
+		t.Errorf("runs=%v known=%v; a roaming job runs on a NORMAL built-in node with executors", runs, known)
+	}
+	noMode := strings.Replace(twoExecutors, `"mode":"NORMAL",`, ``, 1)
+	if _, known := placement(t, noMode, `<project><canRoam>true</canRoam></project>`, 0); known {
+		t.Error("with the mode unread, a roaming job's placement is unknown")
+	}
+}
+
+// The built-in node's labels come from the node list or the instance API.
+// With neither, a job pinned to a custom label cannot be placed: v0.1 decided
+// "not the controller" against the two well-known names alone.
+func TestRunsOnBuiltInNodeNeedsTheNodesLabels(t *testing.T) {
+	unlabelled := strings.Replace(twoExecutors, `"assignedLabels":[{"name":"built-in"}],`, ``, 1)
+	pinned := `<project><canRoam>false</canRoam><assignedNode>controller-pool</assignedNode></project>`
+	if _, known := placement(t, unlabelled, pinned, http.StatusInternalServerError); known {
+		t.Error("with no label list read, a custom label cannot be placed")
+	}
+	// The instance API alone is enough: it carries the built-in node's labels.
+	if runs, known := placement(t, twoExecutors, pinned, http.StatusInternalServerError); runs || !known {
+		t.Errorf("runs=%v known=%v; the instance API listed the built-in node's labels", runs, known)
+	}
+	// The well-known names need no lookup.
+	if runs, known := placement(t, unlabelled, `<project><canRoam>false</canRoam><assignedNode>built-in</assignedNode></project>`, http.StatusInternalServerError); !runs || !known {
+		t.Errorf("runs=%v known=%v; built-in is the controller", runs, known)
+	}
+}

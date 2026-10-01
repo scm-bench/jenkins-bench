@@ -18,6 +18,10 @@ type instance struct {
 	NumExecutors *int  `json:"numExecutors"`
 	UseSecurity  *bool `json:"useSecurity"`
 	UseCrumbs    *bool `json:"useCrumbs"`
+	// The root object is also the built-in node, so its mode and labels come
+	// with Overall/Read — no node list needed. Nil when not exported.
+	Mode           *string  `json:"mode"`
+	AssignedLabels *[]label `json:"assignedLabels"`
 }
 
 // Every endpoint is asked for the fields the scan reads and nothing else.
@@ -27,7 +31,7 @@ type instance struct {
 // that is what hits the request timeout and the response cap, for fields no
 // control reads.
 const (
-	instanceTree = "useSecurity,useCrumbs,numExecutors"
+	instanceTree = "useSecurity,useCrumbs,numExecutors,mode,assignedLabels[name]"
 	computerTree = "computer[_class,displayName,offline,temporarilyOffline,numExecutors,assignedLabels[name]]"
 	pluginTree   = "plugins[shortName,version,enabled,active,hasUpdate]"
 	// jobs[_class]{0,1} asks each item for at most one child: enough to tell
