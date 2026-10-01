@@ -208,7 +208,7 @@ func TestScanRoundTripsASnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 
 	online, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t",
-		"--snapshot-out", path, "--format", "json")
+		"--snapshot-out", path, "-o", "json")
 	if err != nil {
 		t.Fatalf("scan: %v\n%s", err, online)
 	}
@@ -231,7 +231,7 @@ func TestScanRoundTripsASnapshot(t *testing.T) {
 
 	// Re-evaluating offline, with no network and no token, must produce the
 	// same verdicts — that property is what makes a snapshot worth keeping.
-	offline, err := runScanCmd(t, "scan", "--snapshot-in", path, "--format", "json")
+	offline, err := runScanCmd(t, "scan", "--snapshot-in", path, "-o", "json")
 	if err != nil {
 		t.Fatalf("offline scan: %v\n%s", err, offline)
 	}
@@ -323,7 +323,7 @@ func TestScanRejectsAnUnknownFormat(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"schemaVersion":"1","metadata":{"platform":"jenkins"},"controller":{"available":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "--format", "yaml"); err == nil {
+	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "-o", "yaml"); err == nil {
 		t.Error("an unknown format should be rejected")
 	}
 }
@@ -581,7 +581,7 @@ func TestIncompleteSummaryNamesTheContainers(t *testing.T) {
 // resource.
 func verdicts(t *testing.T, args ...string) (map[string]string, error) {
 	t.Helper()
-	out, err := runScanCmd(t, append(args, "--format", "json")...)
+	out, err := runScanCmd(t, append(args, "-o", "json")...)
 	var rep struct {
 		Findings []struct {
 			CheckID  string `json:"checkId"`
@@ -759,5 +759,48 @@ func TestScanNamesTheConfigFileItUses(t *testing.T) {
 	out, _ = runScanCmd(t, "scan", "--snapshot-in", path, "--config", given, "--no-color")
 	if !strings.Contains(out, "using config "+given) {
 		t.Errorf("a config file given with --config must be named too:\n%s", out)
+	}
+}
+
+// v0.1 called the format flag --format; the family calls it -o/--output, and the
+// report's own closing hint already said "-o json" — which failed. The old
+// name still works, says it is deprecated, and cannot silently lose to the
+// new one.
+func TestOutputFlagAndItsDeprecatedAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+		"controller":{"available":{"root":true,"jobs":true}},
+		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
+	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"-o", "json"}, {"--output", "json"}} {
+		out, err := runScanCmd(t, append([]string{"scan", "--snapshot-in", path}, args...)...)
+		if err != nil || !strings.HasPrefix(strings.TrimSpace(out), "{") {
+			t.Errorf("%v: want a JSON report: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, "deprecated") {
+			t.Errorf("%v is not deprecated:\n%s", args, out)
+		}
+	}
+
+	out, err := runScanCmd(t, "scan", "--snapshot-in", path, "--format", "json")
+	if err != nil {
+		t.Fatalf("--format must keep working: %v", err)
+	}
+	if !strings.Contains(out, "--format is deprecated") || !strings.Contains(out, "-o json") {
+		t.Errorf("--format should say it is deprecated and what replaces it:\n%s", out)
+	}
+
+	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "--format", "json", "-o", "sarif"); err == nil {
+		t.Error("--format and -o disagreeing must be an error, not a silent choice")
+	}
+	if _, err := runScanCmd(t, "scan", "--snapshot-in", path, "-c", filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Error("-c is --config: a missing file must be an error")
+	}
+
+	help, _ := runScanCmd(t, "scan", "--help")
+	if strings.Contains(help, "--format") {
+		t.Errorf("the deprecated alias should be hidden from --help:\n%s", help)
 	}
 }

@@ -28,6 +28,7 @@ type scanOptions struct {
 	snapshotOut string
 
 	format         string
+	legacyFormat   string
 	details        string
 	detailsSet     bool
 	showPassed     bool
@@ -89,11 +90,16 @@ token that can read very little is the common case.`,
 	f.StringVar(&opts.baseURL, "url", "", "controller URL (or JENKINS_URL)")
 	f.StringVar(&opts.username, "username", "", "user the API token belongs to (or JENKINS_USER)")
 	f.StringVar(&opts.token, "token", "", "API token (or JENKINS_TOKEN)")
-	f.StringVar(&opts.configPath, "config", "", "path to a configuration file")
+	f.StringVarP(&opts.configPath, "config", "c", "", "path to a configuration file; found automatically as ./jenkins-bench.yaml or in the user config directory")
 	f.StringArrayVar(&opts.sets, "set", nil, "override a config key, e.g. --set scan.failOn=none")
 	f.StringVar(&opts.snapshotIn, "snapshot-in", "", "evaluate a snapshot from disk instead of scanning")
 	f.StringVar(&opts.snapshotOut, "snapshot-out", "", "write the captured snapshot to this path")
-	f.StringVar(&opts.format, "format", report.FormatTable, "output format: "+strings.Join(report.Formats(), ", "))
+	f.StringVarP(&opts.format, "output", "o", report.FormatTable, "report format: "+strings.Join(report.Formats(), ", "))
+	// --format is what v0.1 called it. Kept so a pipeline written against it
+	// does not break on upgrade, hidden so nobody new learns it, and named as
+	// deprecated on stderr whenever it is used.
+	f.StringVar(&opts.legacyFormat, "format", "", "deprecated: use -o/--output")
+	_ = f.MarkHidden("format")
 	// The default table is an overview aggregated by control, so one
 	// misconfiguration across fifty jobs reads as the single thing it is.
 	// --details is the other question: what is wrong with *this* job.
@@ -140,6 +146,10 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		ctx = context.Background()
 	}
 
+	if err := resolveFormat(cmd, opts); err != nil {
+		return err
+	}
+
 	cfg, path, err := loadScanConfig(opts)
 	if err != nil {
 		return err
@@ -157,7 +167,7 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 	}
 
 	if opts.format != "" && !validFormat(opts.format) {
-		return fmt.Errorf("unknown format %q; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
+		return fmt.Errorf("unknown report format %q for -o; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
 	}
 
 	snapshot, err := obtainSnapshot(ctx, opts, cfg)
@@ -195,6 +205,21 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 	}
 
 	return exitStatus(rep, opts)
+}
+
+// resolveFormat folds the deprecated --format into -o/--output, saying so.
+func resolveFormat(cmd *cobra.Command, opts *scanOptions) error {
+	if !cmd.Flags().Changed("format") {
+		return nil
+	}
+	if cmd.Flags().Changed("output") && !strings.EqualFold(opts.legacyFormat, opts.format) {
+		return fmt.Errorf("--format is the old name of -o/--output, and the two disagree (%q, %q); give -o alone", opts.legacyFormat, opts.format)
+	}
+	opts.format = opts.legacyFormat
+	stderr := cmd.ErrOrStderr()
+	console.Writer{W: stderr, P: console.Painter{Enabled: !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)}}.
+		Line(console.Warn, "--format is deprecated and will be removed; use -o %s", opts.format)
+	return nil
 }
 
 // splitFilters turns --details=a,b into its parts, dropping the blanks a
