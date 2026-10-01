@@ -966,3 +966,46 @@ func TestScanRefusesAVersionOneSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// configWithExceptions writes a config with failOn high and the given
+// exceptions block.
+func configWithExceptions(t *testing.T, exceptions string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "jenkins-bench.yaml")
+	if err := os.WriteFile(path, []byte("scan:\n  failOn: high\nexceptions:\n"+exceptions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The bundled sample fails CIS-2.1.2, CIS-2.1.6, CIS-2.2.3 and CIS-2.3.1 at
+// HIGH. Accepting all of them clears the gate; the findings are still in the
+// report, under their own heading, and still in the score.
+func TestExceptionsClearTheGateButNotTheReport(t *testing.T) {
+	snapshot := examplePath(t, "snapshot.json")
+	var accept strings.Builder
+	for _, id := range []string{"CIS-2.1.2", "CIS-2.1.6", "CIS-2.2.3", "CIS-2.3.1"} {
+		fmt.Fprintf(&accept, "  - control: %s\n    resources: [controller, '*', '*/*']\n    reason: migration in progress\n    owner: platform\n    expires: 2999-12-31\n", id)
+	}
+
+	stdout, stderr, err := runScanSplit(t, "scan", "--snapshot-in", snapshot, "--no-color", "-c", configWithExceptions(t, accept.String()))
+	if err != nil {
+		t.Fatalf("exit %d (%v), want 0 with every HIGH failure accepted\n%s", ExitCode(err), err, stderr)
+	}
+	flat := strings.Join(strings.Fields(stdout), " ") // the report wraps to its width
+	for _, want := range []string{"Accepted by exceptions", "accepted until 2999-12-31: migration in progress (platform)", "accepted by exceptions, counted here and in the score"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("report does not say %q\n%s", want, stdout)
+		}
+	}
+
+	// The same exceptions, lapsed: the run fails again and says why.
+	lapsed := strings.ReplaceAll(accept.String(), "2999-12-31", "2001-01-01")
+	_, stderr, err = runScanSplit(t, "scan", "--snapshot-in", snapshot, "--no-color", "-c", configWithExceptions(t, lapsed))
+	if code := ExitCode(err); code != ExitFindings {
+		t.Errorf("exit code = %d, want %d once the exceptions lapse", code, ExitFindings)
+	}
+	if !strings.Contains(stderr, "lapsed on 2001-01-01") {
+		t.Errorf("stderr does not report the lapse:\n%s", stderr)
+	}
+}

@@ -87,6 +87,31 @@ auditPluginNames:
 # one that exists.
 skipDisabledJobs: false
 
+# Exceptions: findings your organisation has decided to live with, for a
+# stated reason and until a stated date. Every field but owner is required —
+# an exception without a reason or an end date is how accepted risk becomes
+# forgotten risk.
+#
+# An accepted finding is still reported (under "Accepted by exceptions"),
+# still FAIL, and still counted in the score: the score describes the
+# controller, and accepting a finding does not change the controller. What it
+# stops doing is failing the run on scan.failOn — or, for a MANUAL finding,
+# counting against scan.maxManual. In SARIF it carries a suppression, which
+# code scanning shows as dismissed.
+#
+# The day after expires, it lapses and the finding fails the run again; an
+# exception that matches nothing is reported too, so the list cannot rot
+# quietly. resources are globs over job full names: * does not cross a "/",
+# so platform/* is every job directly in the platform folder, and
+# "controller" is a controller-scope control.
+#
+# exceptions:
+#   - control: CIS-2.3.5
+#     resources: [platform/legacy-*]
+#     reason: Vendor job, replaced in Q1
+#     owner: platform-team@example.com
+#     expires: 2027-03-31
+
 # Controls to leave out, or the only ones to run. A name that matches no control
 # is an error rather than a no-op: an exclude that matches nothing leaves the
 # control running, and an include that matches nothing narrows the scan to

@@ -778,3 +778,89 @@ func TestSARIFCapsResultsMostSevereFirst(t *testing.T) {
 		t.Error("the run should say how many results it withheld, and where to find them")
 	}
 }
+
+// An accepted finding carries SARIF's own suppression, which code scanning
+// shows as dismissed with the justification, rather than as an open alert.
+func TestSARIFCarriesAcceptedFindingsAsSuppressed(t *testing.T) {
+	rep := sample()
+	for i := range rep.Findings {
+		if rep.Findings[i].CheckID == "CIS-2.3.1" && rep.Findings[i].Status == engine.StatusFail {
+			rep.Findings[i].Waiver = &engine.Waiver{Reason: "vendor job", Owner: "platform", Expires: "2027-03-31"}
+		}
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	var log struct {
+		Runs []struct {
+			Results []struct {
+				RuleID       string `json:"ruleId"`
+				Suppressions []struct {
+					Kind          string `json:"kind"`
+					Status        string `json:"status"`
+					Justification string `json:"justification"`
+				} `json:"suppressions"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, r := range log.Runs[0].Results {
+		if r.RuleID != "CIS-2.3.1" {
+			if len(r.Suppressions) != 0 {
+				t.Errorf("%s was not accepted but carries a suppression", r.RuleID)
+			}
+			continue
+		}
+		seen = true
+		s := r.Suppressions
+		if len(s) != 1 || s[0].Kind != "external" || s[0].Status != "accepted" || !strings.Contains(s[0].Justification, "vendor job") {
+			t.Errorf("suppressions = %+v", s)
+		}
+	}
+	if !seen {
+		t.Fatal("no CIS-2.3.1 result")
+	}
+}
+
+// The table lists an accepted finding under its own heading, never among the
+// failures, and says beside the score why a FAIL count did not fail the run.
+func TestTableSetsAcceptedFindingsApart(t *testing.T) {
+	rep := sample()
+	for i := range rep.Findings {
+		if rep.Findings[i].CheckID == "CIS-2.3.1" && rep.Findings[i].Status == engine.StatusFail {
+			rep.Findings[i].Waiver = &engine.Waiver{Reason: "vendor job", Expires: "2027-03-31"}
+		}
+	}
+	rep.ExceptionWarnings = []string{"the exception for CIS-2.1.6 on controller lapsed on 2026-01-01"}
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 120}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"Accepted by exceptions (1)",
+		"legacy-build  CIS-2.3.1 FAIL: accepted until 2027-03-31: vendor job",
+		"1 failed finding accepted by exceptions",
+		"Exceptions",
+		"lapsed on 2026-01-01",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("table is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "legacy-build  CIS-2.3.1 HIGH") {
+		t.Errorf("an accepted finding was listed among the failures:\n%s", out)
+	}
+
+	var details bytes.Buffer
+	if err := Write(&details, rep, Options{Format: FormatTable, Width: 160, Details: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(details.String(), "accepted until 2027-03-31") {
+		t.Errorf("the details view should carry the note in the finding cell:\n%s", details.String())
+	}
+}

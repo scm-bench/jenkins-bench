@@ -86,7 +86,9 @@ func Compute(findings []Finding) Score {
 func (r *Report) HasFailureAtOrAbove(severity string) bool {
 	threshold := checks.Weight(severity)
 	for _, f := range r.Findings {
-		if f.Status == StatusFail && checks.Weight(f.Severity) >= threshold {
+		// An accepted failure is reported, and stays in the score, but it is
+		// the one kind of failure that does not fail the run.
+		if f.Status == StatusFail && f.Waiver == nil && checks.Weight(f.Severity) >= threshold {
 			return true
 		}
 	}

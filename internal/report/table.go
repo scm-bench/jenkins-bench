@@ -66,6 +66,7 @@ func writeTable(w io.Writer, rep *engine.Report, opts Options) error {
 		writeHeader(w, rep, p, width)
 		writeNotice(w, p, width, opts.Notice)
 		writeWarnings(w, rep, p, width, !opts.NoRemediations)
+		writeExceptionWarnings(w, rep, p, width)
 		writeResourceSections(w, filtered, p, width, opts)
 		if !opts.NoRemediations {
 			writeRemediations(w, filtered, p, width)
@@ -80,6 +81,7 @@ func writeTable(w io.Writer, rep *engine.Report, opts Options) error {
 	// After the findings rather than before them: the unread sentence points
 	// here, and the cause should sit next to the symptom.
 	writeWarnings(w, rep, p, width, !opts.NoRemediations)
+	writeExceptionWarnings(w, rep, p, width)
 	if !opts.NoRemediations {
 		writeRulesIndex(w, rep, p, width)
 	}
@@ -204,6 +206,15 @@ func writeSummary(w io.Writer, rep *engine.Report, p painter, width int) {
 			text += fmt.Sprintf(" across %s", console.Pluralize(s.Failed, "finding"))
 		}
 		summaryLine(w, p, width, ansiDim, text)
+	}
+
+	// Accepted failures stay in the counts and the score above — the
+	// controller is what it is — and this line is what reconciles a FAIL
+	// count with a run that did not fail on it.
+	if accepted := acceptedFailures(rep.Findings); accepted > 0 {
+		summaryLine(w, p, width, ansiDim, fmt.Sprintf(
+			"%s accepted by exceptions, counted here and in the score, not failing the run",
+			console.Pluralize(accepted, "failed finding")))
 	}
 
 	summaryLine(w, p, width, ansiDim, fmt.Sprintf(
@@ -390,6 +401,47 @@ func tallyResources(findings []engine.Finding) []resourceTally {
 		return x.name < y.name
 	})
 	return out
+}
+
+// acceptedNote is the line a finding's exception adds beside it.
+func acceptedNote(wv *engine.Waiver) string {
+	note := fmt.Sprintf("accepted until %s: %s", wv.Expires, wv.Reason)
+	if wv.Owner != "" {
+		note += " (" + wv.Owner + ")"
+	}
+	return note
+}
+
+func acceptedFailures(findings []engine.Finding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Status == engine.StatusFail && f.Waiver != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// writeExceptionWarnings names exceptions that did nothing this run. A lapsed
+// one is a finding failing the run again, and one that matches nothing is an
+// exceptions list starting to rot; both belong where the reader looks for
+// what went wrong.
+func writeExceptionWarnings(w io.Writer, rep *engine.Report, p painter, width int) {
+	if len(rep.ExceptionWarnings) == 0 {
+		return
+	}
+	blank(w)
+	line(w, "%s", p.paint(ansiBold+ansiYellow, "Exceptions"))
+	blank(w)
+	for _, warning := range rep.ExceptionWarnings {
+		for i, l := range console.Wrap(warning, width-4) {
+			prefix := "  - "
+			if i > 0 {
+				prefix = "    "
+			}
+			line(w, "%s%s", prefix, l)
+		}
+	}
 }
 
 func writeWarnings(w io.Writer, rep *engine.Report, p painter, width int, withFix bool) {
@@ -589,6 +641,9 @@ func findingCell(f engine.Finding) string {
 	parts := []string{f.Details}
 	for _, e := range f.Evidence {
 		parts = append(parts, "· "+e)
+	}
+	if f.Waiver != nil {
+		parts = append(parts, acceptedNote(f.Waiver))
 	}
 	if f.FixSummary != "" && (f.Status == engine.StatusFail || (f.Status == engine.StatusManual && !f.Automated)) {
 		parts = append(parts, "fix: "+f.FixSummary)

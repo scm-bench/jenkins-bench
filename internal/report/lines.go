@@ -31,9 +31,11 @@ const minFlowWidth = 20
 // ShowPassed), then the one-sentence unread summary. Unread findings are not
 // listed per record — they are one cause, explained once in the scan warnings.
 func writeFindingLines(w io.Writer, rep *engine.Report, p painter, width int, opts Options) {
-	var fails, passes []engine.Finding
+	var fails, passes, accepted []engine.Finding
 	for _, f := range rep.Findings {
 		switch {
+		case f.Waiver != nil:
+			accepted = append(accepted, f)
 		case f.Status == engine.StatusFail:
 			fails = append(fails, f)
 		case f.Status == engine.StatusPass && opts.ShowPassed:
@@ -41,7 +43,7 @@ func writeFindingLines(w io.Writer, rep *engine.Report, p painter, width int, op
 		}
 	}
 	manuals := groupByControlDetails(rep.Findings, func(f engine.Finding) bool {
-		return f.Status == engine.StatusManual && !unread(f)
+		return f.Status == engine.StatusManual && !unread(f) && f.Waiver == nil
 	})
 	var nas []findingGroup
 	if opts.ShowPassed {
@@ -51,7 +53,7 @@ func writeFindingLines(w io.Writer, rep *engine.Report, p painter, width int, op
 	}
 	unreadSentence := unreadSummary(rep.Findings)
 
-	if len(fails) == 0 && len(passes) == 0 && len(manuals) == 0 && len(nas) == 0 && unreadSentence == "" {
+	if len(fails) == 0 && len(passes) == 0 && len(manuals) == 0 && len(nas) == 0 && len(accepted) == 0 && unreadSentence == "" {
 		blank(w)
 		line(w, "%s", p.paint(ansiGreen, "No failed or manual-review controls."))
 		return
@@ -76,6 +78,17 @@ func writeFindingLines(w io.Writer, rep *engine.Report, p painter, width int, op
 	if len(nas) > 0 {
 		blank(w)
 		writeGroupLines(w, p, width, statusNA, nas, opts)
+	}
+	// Accepted findings last among the findings: still listed, so an exception
+	// never makes a problem invisible, but below everything that fails the run.
+	if len(accepted) > 0 {
+		blank(w)
+		line(w, "%s", p.paint(ansiBold, fmt.Sprintf("Accepted by exceptions (%d)", len(accepted))))
+		for _, f := range controllerFirst(accepted) {
+			head := fmt.Sprintf("%s  %s %s: ", p.paint(ansiBold, f.Resource), p.paint(ansiCyan, f.CheckID), p.paint(ansiDim, string(f.Status)))
+			headWidth := len(f.Resource) + 2 + len(f.CheckID) + 1 + len(f.Status) + 2
+			flowLine(w, width, head, headWidth, acceptedNote(f.Waiver))
+		}
 	}
 
 	if unreadSentence != "" {

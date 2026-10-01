@@ -240,6 +240,14 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 	if err != nil {
 		return err
 	}
+	// Printed whatever the verbosity: a lapsed exception is a finding that
+	// starts failing the run today, and the exit code alone would not say why.
+	if len(rep.ExceptionWarnings) > 0 {
+		w := console.Writer{W: stderr, P: console.Painter{Enabled: colour}}
+		for _, warning := range rep.ExceptionWarnings {
+			w.Line(console.Warn, "%s", warning)
+		}
+	}
 
 	// Rendered into memory first, so a report that fails half-way never
 	// leaves half a report behind — on stdout or in a file.
@@ -514,7 +522,9 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		// be a lie. What the gate measures is what the token failed to read.
 		unread := 0
 		for _, f := range rep.Findings {
-			if f.Status == engine.StatusManual && f.Automated {
+			// An accepted MANUAL finding is one somebody has reviewed by hand
+			// and recorded as such; it is no longer a gap in what was seen.
+			if f.Status == engine.StatusManual && f.Automated && f.Waiver == nil {
 				unread++
 			}
 		}
@@ -584,7 +594,9 @@ func failureSummary(rep *engine.Report, threshold string) string {
 	controls := map[string]bool{}
 	resources := map[string]bool{}
 	for _, f := range rep.Findings {
-		if f.Status != engine.StatusFail {
+		// Accepted failures do not fail the run, so they are not what this
+		// line explains.
+		if f.Status != engine.StatusFail || f.Waiver != nil {
 			continue
 		}
 		if !severityAtOrAbove(f.Severity, threshold) {

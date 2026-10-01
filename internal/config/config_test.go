@@ -187,3 +187,37 @@ func TestCAFileAndInsecureAreExclusive(t *testing.T) {
 		t.Error("caFile with insecure should be refused")
 	}
 }
+
+// An exception without a reason or an end date is how accepted risk becomes
+// forgotten risk, so neither is optional, and a malformed one is refused at
+// load rather than silently matching nothing.
+func TestExceptionsAreValidated(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "jenkins-bench.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    reason: vendor job\n    expires: 2027-03-31\n"
+	if _, err := Load(write(t, valid)); err != nil {
+		t.Fatalf("a complete exception was refused: %v", err)
+	}
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"no control", "exceptions:\n  - resources: [platform/*]\n    reason: r\n    expires: 2027-03-31\n", "control is required"},
+		{"no resources", "exceptions:\n  - control: CIS-2.3.5\n    reason: r\n    expires: 2027-03-31\n", "resources is required"},
+		{"empty resource", "exceptions:\n  - control: CIS-2.3.5\n    resources: ['']\n    reason: r\n    expires: 2027-03-31\n", "empty resource pattern"},
+		{"bad glob", "exceptions:\n  - control: CIS-2.3.5\n    resources: ['platform/[']\n    reason: r\n    expires: 2027-03-31\n", "platform/["},
+		{"no reason", "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    expires: 2027-03-31\n", "reason is required"},
+		{"no expiry", "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    reason: r\n", "expires is required"},
+		{"bad expiry", "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    reason: r\n    expires: next spring\n", "not a date"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(write(t, tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "exceptions[0]") {
+				t.Errorf("err = %v, want it to mention exceptions[0] and %q", err, tc.want)
+			}
+		})
+	}
+}

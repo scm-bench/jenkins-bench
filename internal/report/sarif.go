@@ -110,12 +110,22 @@ type sarifRuleProperty struct {
 }
 
 type sarifResult struct {
-	RuleID              string            `json:"ruleId"`
-	Level               string            `json:"level"`
-	Message             sarifText         `json:"message"`
-	Locations           []sarifLocation   `json:"locations"`
-	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
-	Properties          map[string]any    `json:"properties,omitempty"`
+	RuleID              string             `json:"ruleId"`
+	Level               string             `json:"level"`
+	Message             sarifText          `json:"message"`
+	Locations           []sarifLocation    `json:"locations"`
+	PartialFingerprints map[string]string  `json:"partialFingerprints,omitempty"`
+	Suppressions        []sarifSuppression `json:"suppressions,omitempty"`
+	Properties          map[string]any     `json:"properties,omitempty"`
+}
+
+// sarifSuppression is SARIF's own way of saying a result was reviewed and
+// accepted, which is what an exception is; a consumer that understands it
+// shows the result as dismissed rather than open.
+type sarifSuppression struct {
+	Kind          string `json:"kind"`
+	Status        string `json:"status"`
+	Justification string `json:"justification"`
 }
 
 type sarifLocation struct {
@@ -409,6 +419,7 @@ func buildResult(f engine.Finding, where place) sarifResult {
 			"primaryLocationLineHash": fingerprint(where.host, f.CheckID, f.Resource) + ":1",
 			"scmBenchFindingV1":       fingerprint(f.CheckID, f.Resource),
 		},
+		Suppressions: suppressionsFor(f),
 		Properties: map[string]any{
 			"status":       string(f.Status),
 			"severity":     strings.ToUpper(f.Severity),
@@ -418,6 +429,13 @@ func buildResult(f engine.Finding, where place) sarifResult {
 	}
 }
 
+func suppressionsFor(f engine.Finding) []sarifSuppression {
+	if f.Waiver == nil {
+		return nil
+	}
+	return []sarifSuppression{{Kind: "external", Status: "accepted", Justification: acceptedNote(f.Waiver)}}
+}
+
 // buildAggregateResult is the one result for a control no API can answer,
 // naming how many resources it covers and anchored at the controller.
 func buildAggregateResult(group []engine.Finding, where place) sarifResult {
@@ -425,6 +443,14 @@ func buildAggregateResult(group []engine.Finding, where place) sarifResult {
 	anchor := f
 	anchor.Resource = engine.InstanceResourceName
 	anchor.ResourceType = engine.ResourceController
+	// The one result stands for every job, so it is suppressed only when an
+	// exception accepted the control on all of them.
+	for _, member := range group {
+		if member.Waiver == nil {
+			anchor.Waiver = nil
+			break
+		}
+	}
 	result := buildResult(anchor, where)
 	if len(group) > 1 || f.ResourceType != engine.ResourceController {
 		result.Message.Text = fmt.Sprintf("Manual review required for %s: %s", console.Pluralize(len(group), f.ResourceType), f.Details)

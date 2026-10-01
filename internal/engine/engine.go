@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/open-policy-agent/opa/v1/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
@@ -70,6 +72,17 @@ type Finding struct {
 	// Automated is false for controls that are documented as unanswerable by
 	// the API and always report MANUAL.
 	Automated bool `json:"automated"`
+	// Waiver is set when a configured exception accepts this finding. The
+	// status is unchanged — an accepted FAIL is still a FAIL, and still counts
+	// in the score — but it no longer fails the run.
+	Waiver *Waiver `json:"waiver,omitempty"`
+}
+
+// Waiver is the exception that accepted a finding, as the report shows it.
+type Waiver struct {
+	Reason  string `json:"reason"`
+	Owner   string `json:"owner,omitempty"`
+	Expires string `json:"expires"`
 }
 
 // Report is the full result of an evaluation.
@@ -84,6 +97,10 @@ type Report struct {
 	// Errors records policies that failed to evaluate. They surface as MANUAL
 	// findings too, so a broken rule is loud but not fatal.
 	Errors []string `json:"errors,omitempty"`
+	// ExceptionWarnings names configured exceptions that did nothing this
+	// run: lapsed ones, and ones no finding matched any more. Both are how an
+	// exceptions list rots, so both are said out loud.
+	ExceptionWarnings []string `json:"exceptionWarnings,omitempty"`
 }
 
 // Coverage counts what the job-scope controls were evaluated against.
@@ -119,6 +136,8 @@ type Engine struct {
 	bundle   *checks.Bundle
 	prepared map[string]rego.PreparedEvalQuery
 	selected []checks.Check
+	// now decides which exceptions have lapsed; a field so tests can fix it.
+	now func() time.Time
 }
 
 // New compiles the embedded policies for the given platform and configuration.
@@ -283,7 +302,61 @@ func (e *Engine) Evaluate(ctx context.Context, snapshot *ci.Snapshot) (*Report, 
 
 	sortFindings(report.Findings)
 	report.Score = Compute(report.Findings)
+	now := time.Now
+	if e.now != nil {
+		now = e.now
+	}
+	report.ExceptionWarnings = applyExceptions(report.Findings, e.cfg.Exceptions, now())
 	return report, nil
+}
+
+// applyExceptions marks the findings configured exceptions accept and returns
+// what is worth telling the operator about the exceptions themselves.
+//
+// Only FAIL and MANUAL findings can be accepted: there is nothing to accept
+// about a PASS or an NA. The score is computed before this runs and does not
+// change — it describes the controller, and accepting a finding does not
+// change the controller.
+func applyExceptions(findings []Finding, exceptions []config.Exception, now time.Time) []string {
+	var warnings []string
+	for _, ex := range exceptions {
+		if !now.Before(ex.ExpiresAt()) {
+			warnings = append(warnings, fmt.Sprintf("the exception for %s on %s lapsed on %s; its findings fail the run again (%s)",
+				ex.Control, strings.Join(ex.Resources, ", "), ex.Expires, ex.Reason))
+			continue
+		}
+		matched := 0
+		for i := range findings {
+			f := &findings[i]
+			if !strings.EqualFold(f.CheckID, ex.Control) || !resourceMatches(ex.Resources, f.Resource) {
+				continue
+			}
+			if f.Status != StatusFail && f.Status != StatusManual {
+				continue
+			}
+			if f.Waiver == nil {
+				f.Waiver = &Waiver{Reason: ex.Reason, Owner: ex.Owner, Expires: ex.Expires}
+			}
+			matched++
+		}
+		if matched == 0 {
+			warnings = append(warnings, fmt.Sprintf("the exception for %s on %s accepts nothing this run — the finding is fixed, renamed or out of scope; remove it",
+				ex.Control, strings.Join(ex.Resources, ", ")))
+		}
+	}
+	return warnings
+}
+
+// resourceMatches compares case-sensitively, as Jenkins names its items:
+// platform/legacy-* must not accept a job in a different folder called
+// Platform.
+func resourceMatches(patterns []string, resource string) bool {
+	for _, pattern := range patterns {
+		if ok, _ := path.Match(pattern, resource); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // jobResult is one job's findings, and the policy errors behind any of them.
