@@ -37,8 +37,8 @@ internal/
     jenkins/            API client, fetcher, the matching the fetcher resolves
   checks/policies/      one directory per control: check.rego, check_test.rego,
                         metadata.json
-  engine/               compiles the bundle once, evaluates, scores
-  report/               table, json, sarif
+  engine/               compiles the bundle once, evaluates, scores, applies exceptions
+  report/               table, json, sarif, junit
   config/               thresholds handed to Rego as input.config
   cli/                  flags, exit codes, the scan trace
 ```
@@ -52,9 +52,17 @@ platform that means three things in particular:
   fetcher hands Rego `runsOnBuiltInNode`, a boolean. A rule asks *"can this job
   run on the controller?"*, not *"does `built-in && linux` match this node?"*
 - **How a job is defined.** `CpsScmFlowDefinition`, `CpsFlowDefinition`, a
-  `<project>` root element and a multibranch project all answer the same
-  question differently. The fetcher normalizes them to
-  `definition.source: scm | inline | ui | unknown`.
+  `<project>` root element and a multibranch project's branch factory all
+  answer the same question differently. The fetcher normalizes them to
+  `definition.source: scm | inline | ui | unknown`, and a class or factory it
+  has not been taught is `unknown`, never assumed to be the common case.
+- **What starts a build.** Which trigger classes skip Jenkins' per-user
+  authorization is plugin knowledge. The fetcher resolves it into
+  `unauthenticatedTriggers` and `unrecognizedTriggers` (`triggers.go`), and a
+  rule only counts them.
+- **Where Groovy runs outside the sandbox.** Script-security's flag turns up in
+  build steps, publishers and parameters as well as the pipeline definition;
+  the fetcher finds it by shape and records `scripts` (`scripts.go`).
 - **Whether a credential store was really empty.** Reading credentials without
   permission returns `200` with an empty store list rather than `403`, so
   `available.credentials` is not set from the HTTP status. See
@@ -143,9 +151,14 @@ catches the bug where a rule silently produces no verdict, which looks exactly
 like a passing test run.
 
 The fetcher is tested against a stand-in server. That proves the code is
-self-consistent; it does **not** prove the platform behaves like the stand-in. If
-you have a real instance, running against it and reporting what differed is the
-single most valuable thing you can do here.
+self-consistent; it does **not** prove the platform behaves like the stand-in.
+[`hack/e2e`](hack/e2e) is the suite that does: it boots a disposable controller
+whose every job puts a control in a known state, scans it with tokens of five
+different privileges, and fails on any verdict that differs from what the
+fixture is, on any write, and on any planted secret that reaches a snapshot. A
+change to the fetcher or to a rule should pass it; a new control should add a
+job to its fixture. If you have a real instance of your own, running against it
+and reporting what differed is the single most valuable thing you can do here.
 
 ## Releasing
 

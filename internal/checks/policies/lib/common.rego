@@ -77,7 +77,7 @@ plugin_installed(short_name) if {
 #
 # It goes first in a control's chain, ahead of the availability checks: whether
 # a job is disabled comes from the job API that Job/Read already reads.
-# scan.skipDisabledJobs drops these jobs from the report instead.
+# skipDisabledJobs drops these jobs from the report instead.
 job_disabled if {
 	object.get(resource, "disabled", false) == true
 }
