@@ -1,0 +1,41 @@
+examples/config.yaml
+  s_48d8fa1c49bfb6::t_c8d4f25f17d37c 39-44
+internal/ci/jenkins/client.go
+  s_48d8fa1c49bfb6::t_6e2f39fda3301a 8-9,67-69,107-108,110-116,360-363,368-371,432-444
+internal/ci/jenkins/client_test.go
+  s_66212c309e21f0::t_e71e03b439ec7d 5,9-10,643-700
+internal/ci/jenkins/tls.go
+  s_48d8fa1c49bfb6::t_c5dede4d791c43 3-8,16-37
+internal/cli/scan.go
+  s_48d8fa1c49bfb6::t_c962e9de2f1a67 373
+internal/cli/scan_test.go
+  s_48d8fa1c49bfb6::t_87340eeda1eef6 940-948
+internal/config/config.go
+  s_48d8fa1c49bfb6::t_81b5a80160e235 65-69,252-257
+internal/config/config_test.go
+  s_66212c309e21f0::t_cb577785369345 176-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "06d20473a5f9f399f8efc9c8147d566c59e90d75",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    },
+    "s_66212c309e21f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8763d161-5362-48a1-ae9b-11f7bcd83469",
+        "model": "unknown"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
