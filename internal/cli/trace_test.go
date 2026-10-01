@@ -222,3 +222,28 @@ func TestProgressOverwritesInPlaceAndStepsAsideForWarnings(t *testing.T) {
 		t.Errorf("clear should leave the cursor at the start of an erased line:\n%q", got)
 	}
 }
+
+// scan.progress: full prints every request without -v; off prints none of
+// them, and the closing account still.
+func TestProgressSettingDecidesWhatIsPrinted(t *testing.T) {
+	srv := controller(t, false)
+	_, full, err := runScanSplit(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color", "--set", "scan.progress=full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(full, "GET  /api/json?tree=useSecurity") {
+		t.Errorf("progress full should print every request:\n%s", full)
+	}
+	_, off, err := runScanSplit(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color", "--set", "scan.progress=off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(off, "GET  /") || !strings.Contains(off, "0 writes · read-only") {
+		t.Errorf("progress off prints no request and still accounts for them:\n%s", off)
+	}
+	// -v was typed just now and wins over the file.
+	_, verbose, _ := runScanSplit(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color", "--set", "scan.progress=off", "-v")
+	if !strings.Contains(verbose, "GET  /api/json?tree=useSecurity") {
+		t.Errorf("-v should override progress off:\n%s", verbose)
+	}
+}

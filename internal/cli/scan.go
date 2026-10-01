@@ -141,14 +141,17 @@ token that can read very little is the common case.`,
 
 // movedFlags maps flag-shaped spellings of config keys to the real key.
 var movedFlags = map[string]string{
-	"fail-on":         "scan.failOn",
-	"fail-under":      "scan.failUnder",
-	"max-manual":      "scan.maxManual",
-	"concurrency":     "scan.concurrency",
-	"timeout":         "scan.timeout",
-	"max-duration":    "scan.maxDuration",
-	"insecure":        "scan.insecure",
-	"allow-plaintext": "scan.allowPlaintext",
+	"fail-on":          "scan.failOn",
+	"fail-under":       "scan.failUnder",
+	"max-manual":       "scan.maxManual",
+	"concurrency":      "scan.concurrency",
+	"timeout":          "scan.timeout",
+	"max-duration":     "scan.maxDuration",
+	"insecure":         "scan.insecure",
+	"allow-plaintext":  "scan.allowPlaintext",
+	"allow-incomplete": "scan.allowIncomplete",
+	"ca-file":          "scan.caFile",
+	"progress":         "scan.progress",
 }
 
 // movedFlagError upgrades "unknown flag" for a config-key spelling into the
@@ -221,10 +224,16 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 	// CI log as much as on a terminal.
 	stderr := cmd.ErrOrStderr()
 	colour := !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)
-	trace := newTracer(stderr, colour, opts.verbose)
+	// scan.progress is the deployment's choice; -v was typed just now, and
+	// wins over it.
+	shown := strings.ToLower(cfg.Scan.Progress)
+	if opts.verbose {
+		shown = "full"
+	}
+	trace := newTracer(stderr, colour, shown == "full")
 	// One self-overwriting line on a terminal, unless every request is
-	// already being printed.
-	progress := newProgressWriter(stderr, !opts.verbose)
+	// already being printed, or nothing is to be.
+	progress := newProgressWriter(stderr, shown == "compact")
 	snapshot, err := obtainSnapshot(ctx, stderr, colour, opts, cfg, trace, progress)
 	progress.clear()
 	if line, tag := trace.summary(); line != "" {

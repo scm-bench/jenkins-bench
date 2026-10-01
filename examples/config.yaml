@@ -36,6 +36,12 @@ scan:
   timeout: 30s
   maxDuration: 0s
 
+  # How much the scan says on stderr while it runs: full prints every request
+  # (as -v does, which overrides this), compact one self-overwriting line on a
+  # terminal, off nothing. The closing account of what was sent — "✓ N requests
+  # · N GET · 0 writes · read-only" — is printed whatever this says.
+  progress: compact
+
   # A controller whose certificate comes from an internal CA: name a PEM bundle
   # holding that CA, trusted in addition to the system's. This is the setting
   # an enterprise controller needs — not insecure, which stops checking who

@@ -144,6 +144,11 @@ type Scan struct {
 	// the jobs in such a folder are absent from the report, not judged, and a
 	// CI gate that passes on them has not looked.
 	AllowIncomplete bool `yaml:"allowIncomplete"`
+	// Progress is how much the scan says while it runs, on stderr: full
+	// prints every request (what -v does), compact one self-overwriting line
+	// on a terminal, off nothing. The closing account of what was sent is
+	// printed whatever this says.
+	Progress string `yaml:"progress"`
 }
 
 // Duration is time.Duration that reads YAML the way people write durations:
@@ -191,6 +196,7 @@ func Default() Config {
 			Concurrency: 8,
 			Timeout:     Duration(30 * time.Second),
 			MaxDuration: 0,
+			Progress:    "compact",
 		},
 		Thresholds: Thresholds{
 			UpdateSiteMaxAgeDays: 30,
@@ -307,6 +313,11 @@ func (c Config) Validate() error {
 	}
 	if s.Concurrency < 1 {
 		return fmt.Errorf("scan.concurrency must be at least 1, got %d", s.Concurrency)
+	}
+	switch strings.ToLower(s.Progress) {
+	case "full", "compact", "off":
+	default:
+		return fmt.Errorf("scan.progress %q: want full, compact or off", s.Progress)
 	}
 	if s.FailUnder < 0 || s.FailUnder > 100 {
 		return fmt.Errorf("scan.failUnder must be between 0 and 100, got %d", s.FailUnder)

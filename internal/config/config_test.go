@@ -221,3 +221,18 @@ func TestExceptionsAreValidated(t *testing.T) {
 		})
 	}
 }
+
+func TestProgressIsValidated(t *testing.T) {
+	for _, ok := range []string{"full", "compact", "off", "OFF"} {
+		cfg := Default()
+		cfg.Scan.Progress = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("progress %q: %v", ok, err)
+		}
+	}
+	cfg := Default()
+	cfg.Scan.Progress = "loud"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "scan.progress") {
+		t.Errorf("an unknown progress mode should be refused: %v", err)
+	}
+}
