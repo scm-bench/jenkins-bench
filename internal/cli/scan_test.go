@@ -726,3 +726,38 @@ func TestScanDoesNotTakeASignInPageForAnonymousAccess(t *testing.T) {
 		t.Errorf("CIS-2.1.6 = %q, want MANUAL: the probe was redirected, not answered", got["CIS-2.1.6 controller"])
 	}
 }
+
+// A config file found in the working directory changes how the scan judges and
+// when it fails — and a pull request can add one. The scan names every config
+// file it reads, on stderr, found or given.
+func TestScanNamesTheConfigFileItUses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+		"controller":{"available":{"root":true,"jobs":true}},
+		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
+	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jenkins-bench.yaml"), []byte("scan:\n  failOn: none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	out, err := runScanCmd(t, "scan", "--snapshot-in", path, "--no-color")
+	if err != nil {
+		t.Fatalf("scan: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "using config jenkins-bench.yaml") {
+		t.Errorf("a discovered config file must be named:\n%s", out)
+	}
+
+	given := filepath.Join(t.TempDir(), "ci.yaml")
+	if err := os.WriteFile(given, []byte("scan:\n  failOn: none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = runScanCmd(t, "scan", "--snapshot-in", path, "--config", given, "--no-color")
+	if !strings.Contains(out, "using config "+given) {
+		t.Errorf("a config file given with --config must be named too:\n%s", out)
+	}
+}

@@ -140,11 +140,21 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		ctx = context.Background()
 	}
 
-	cfg, err := loadScanConfig(opts)
+	cfg, path, err := loadScanConfig(opts)
 	if err != nil {
 		return err
 	}
 	opts.scan = cfg.Scan
+	// Named on stderr whenever a file was read, found or given. A config file
+	// changes how the scan judges and when it fails, and one found in the
+	// working directory may have arrived with the pull request being gated:
+	// a threshold that came quietly from a file is an exit code nobody can
+	// explain.
+	if path != "" {
+		stderr := cmd.ErrOrStderr()
+		console.Writer{W: stderr, P: console.Painter{Enabled: !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)}}.
+			Line(console.Info, "using config %s", path)
+	}
 
 	if opts.format != "" && !validFormat(opts.format) {
 		return fmt.Errorf("unknown format %q; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
@@ -209,26 +219,28 @@ func validFormat(f string) bool {
 	return false
 }
 
-func loadScanConfig(opts *scanOptions) (config.Config, error) {
+// loadScanConfig reads the config file given or discovered, and returns its
+// path ("" when there was none).
+func loadScanConfig(opts *scanOptions) (config.Config, string, error) {
 	path := opts.configPath
 	if path == "" {
 		discovered, err := config.Discover()
 		if err != nil {
-			return config.Config{}, err
+			return config.Config{}, "", err
 		}
 		path = discovered
 	}
 	cfg, err := config.LoadWithOverrides(path, opts.sets)
 	if err != nil {
-		return config.Config{}, err
+		return config.Config{}, path, err
 	}
 	// Validated at startup rather than at verdict time: a threshold that
 	// silently inverts a control should stop the run, not change what a report
 	// means without saying so.
 	if err := cfg.Validate(); err != nil {
-		return config.Config{}, err
+		return config.Config{}, path, err
 	}
-	return cfg, nil
+	return cfg, path, nil
 }
 
 func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (*ci.Snapshot, error) {
