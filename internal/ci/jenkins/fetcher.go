@@ -38,9 +38,19 @@ const (
 	AvailUpdateSite  = "updateSite"
 	AvailCredentials = "credentials"
 
+	// AvailJobs is true when every container in the job tree was listed. It
+	// lives on the controller because what it qualifies is the job list as a
+	// whole: a folder that could not be listed takes its jobs out of the scan
+	// without leaving a job behind to carry the error.
+	AvailJobs = "jobs"
+
 	AvailJobAPI    = "api"
 	AvailJobConfig = "config"
 )
+
+// rootContainer names the top level in Controller.Unlisted. A job's full name
+// never starts with a slash, so it cannot collide with a folder.
+const rootContainer = "/"
 
 // Fetcher captures a snapshot of one controller.
 type Fetcher struct {
@@ -53,6 +63,9 @@ type Fetcher struct {
 
 	mu       sync.Mutex
 	warnings []string
+	// unlisted collects the containers whose listing failed, for
+	// Controller.Unlisted.
+	unlisted []string
 }
 
 // NewFetcher returns a fetcher reading through c.
@@ -87,12 +100,14 @@ func (f *Fetcher) Fetch(ctx context.Context) (*ci.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap.Controller = *controller
 
 	jobs, err := f.fetchJobs(ctx, controller)
 	if err != nil {
 		return nil, err
 	}
+	// After the jobs, not before: listing them is what decides whether the
+	// job list is complete, and that is recorded on the controller.
+	snap.Controller = *controller
 	snap.Jobs = jobs
 
 	f.mu.Lock()
@@ -300,19 +315,38 @@ func jobPath(fullName string) string {
 
 // listJobs walks folders recursively. A nested tree= expression truncates at
 // whatever depth it was written for, silently losing deeper folders.
-func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) error {
+//
+// container is the folder's full name, "" for the top level.
+func (f *Fetcher) listJobs(ctx context.Context, container string, out *[]item) error {
 	var listing jobListing
+	prefix := ""
+	if container != "" {
+		prefix = jobPath(container)
+	}
 	path := prefix + "/api/json?tree=jobs[fullName,name,url,_class]"
 	if err := f.client.GetJSON(ctx, path, &listing); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		f.warn("the job list under %q could not be read (%v); jobs there are missing from this scan", displayPrefix(prefix), err)
+		// Not fatal — the rest of the tree is still worth auditing — but not
+		// a footnote either. The jobs in here are not failing or passing,
+		// they are absent, and a scan that cannot say how many is
+		// incomplete: Controller.Unlisted carries the name to the exit code.
+		// A token Jenkins filters the folder's contents for gets a 200 with
+		// fewer jobs, not an error, and lands nowhere near here.
+		name := container
+		if name == "" {
+			name = rootContainer
+		}
+		f.mu.Lock()
+		f.unlisted = append(f.unlisted, name)
+		f.mu.Unlock()
+		f.warn("the job list of %s could not be read (%v); the jobs in it are missing from this scan", describeContainer(container), err)
 		return nil
 	}
 	for _, it := range listing.Jobs {
 		if isContainer(it.Class) {
-			if err := f.listJobs(ctx, jobPath(it.FullName), out); err != nil {
+			if err := f.listJobs(ctx, it.FullName, out); err != nil {
 				return err
 			}
 			continue
@@ -324,11 +358,12 @@ func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) erro
 	return nil
 }
 
-func displayPrefix(prefix string) string {
-	if prefix == "" {
-		return "/"
+// describeContainer names a container in a sentence.
+func describeContainer(container string) string {
+	if container == "" {
+		return "the top level"
 	}
-	return prefix
+	return fmt.Sprintf("folder %q", container)
 }
 
 func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]ci.Job, error) {
@@ -336,6 +371,10 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 	if err := f.listJobs(ctx, "", &items); err != nil {
 		return nil, err
 	}
+	f.mu.Lock()
+	controller.Unlisted = append([]string(nil), f.unlisted...)
+	f.mu.Unlock()
+	controller.Available[AvailJobs] = len(controller.Unlisted) == 0
 
 	builtInLabels := builtInNodeLabels(controller)
 	jobs := make([]ci.Job, len(items))

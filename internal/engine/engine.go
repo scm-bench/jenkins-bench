@@ -94,6 +94,14 @@ type Coverage struct {
 	// only means "nothing was audited" when at least one control asked about
 	// jobs; a run narrowed to controller-scope controls asked nothing.
 	JobControls int `json:"jobControls"`
+	// Complete is false when part of the job tree could not be listed. The
+	// jobs in it are missing from the findings rather than judged, and
+	// nothing else in a report would show it: an absent job reads exactly
+	// like a job with nothing wrong.
+	Complete bool `json:"complete"`
+	// Unlisted names the containers whose job list could not be read, "/"
+	// for the top level.
+	Unlisted []string `json:"unlisted,omitempty"`
 }
 
 // NoJobsAudited reports whether the run asked about jobs and had none to ask
@@ -234,6 +242,11 @@ func (e *Engine) Evaluate(ctx context.Context, snapshot *ci.Snapshot) (*Report, 
 		jobInputs = append(jobInputs, jobInput{name: job.FullName, value: value})
 	}
 	report.Coverage.Jobs = len(jobInputs)
+	// A snapshot that does not record the listing as complete is treated as
+	// incomplete: a key nobody set proves nothing about the jobs it would
+	// have covered.
+	report.Coverage.Complete = snapshot.Controller.Available["jobs"]
+	report.Coverage.Unlisted = append([]string(nil), snapshot.Controller.Unlisted...)
 	for _, check := range e.selected {
 		if check.Scope == checks.ScopeJob {
 			report.Coverage.JobControls++

@@ -23,7 +23,7 @@ func hardenedSnapshot() *ci.Snapshot {
 			},
 			BuiltInNode: ci.BuiltInNode{NumExecutors: 0, NumExecutorsKnown: true},
 			Available: map[string]bool{
-				"root": true, "agents": true, "plugins": true, "updateSite": true, "credentials": true,
+				"root": true, "agents": true, "plugins": true, "updateSite": true, "credentials": true, "jobs": true,
 			},
 		},
 		Jobs: []ci.Job{
@@ -351,5 +351,27 @@ func TestCoverageCountsWhatTheJobControlsSaw(t *testing.T) {
 	cfg.Include = []string{"CIS-2.1.6"}
 	if rep := evaluate(t, cfg, empty); rep.Coverage.NoJobsAudited() {
 		t.Errorf("a controller-only run did not need jobs: %+v", rep.Coverage)
+	}
+}
+
+// Completeness travels from the snapshot to the report, names and all, and a
+// snapshot that never recorded it counts as incomplete.
+func TestCoverageCarriesTheListingsCompleteness(t *testing.T) {
+	if rep := evaluate(t, config.Default(), hardenedSnapshot()); !rep.Coverage.Complete {
+		t.Error("a snapshot whose listing completed should be complete")
+	}
+
+	partial := hardenedSnapshot()
+	partial.Controller.Available["jobs"] = false
+	partial.Controller.Unlisted = []string{"prod"}
+	rep := evaluate(t, config.Default(), partial)
+	if rep.Coverage.Complete || len(rep.Coverage.Unlisted) != 1 || rep.Coverage.Unlisted[0] != "prod" {
+		t.Errorf("coverage = %+v, want incomplete with prod unlisted", rep.Coverage)
+	}
+
+	unrecorded := hardenedSnapshot()
+	delete(unrecorded.Controller.Available, "jobs")
+	if rep := evaluate(t, config.Default(), unrecorded); rep.Coverage.Complete {
+		t.Error("a snapshot that does not say its listing completed must not be taken as complete")
 	}
 }

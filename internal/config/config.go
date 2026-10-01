@@ -67,6 +67,11 @@ type Scan struct {
 	// AllowPlaintext permits an http:// URL, sending credentials in the
 	// clear.
 	AllowPlaintext bool `yaml:"allowPlaintext"`
+	// AllowIncomplete accepts a scan in which some folder could not be
+	// listed, exiting on the thresholds alone rather than 2. Off by default:
+	// the jobs in such a folder are absent from the report, not judged, and a
+	// CI gate that passes on them has not looked.
+	AllowIncomplete bool `yaml:"allowIncomplete"`
 }
 
 // Duration is time.Duration that reads YAML the way people write durations:

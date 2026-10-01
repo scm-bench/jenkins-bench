@@ -643,3 +643,56 @@ func TestFetcherWalksIntoOrganizationFolders(t *testing.T) {
 		t.Errorf("kind = %q, want multibranch", snap.Jobs[0].Kind)
 	}
 }
+
+// A folder that cannot be listed takes its jobs out of the scan. The warning
+// says so; Unlisted and available["jobs"] are what make the scan exit 2 for it.
+func TestFetcherMarksTheJobListIncompleteForAnUnlistableFolder(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"prod","fullName":"prod","url":"http://x/job/prod/"}]}`}
+	s.handlers["/job/prod/api/json"] = standResponse{status: http.StatusInternalServerError, body: `oops`}
+
+	snap := fetchFrom(t, s)
+	if snap.Controller.Available[AvailJobs] {
+		t.Error("a folder that could not be listed leaves the job list incomplete")
+	}
+	if len(snap.Controller.Unlisted) != 1 || snap.Controller.Unlisted[0] != "prod" {
+		t.Errorf("unlisted = %v, want [prod]", snap.Controller.Unlisted)
+	}
+	if len(snap.Jobs) != 1 {
+		t.Errorf("the job outside the folder is still scanned: %+v", snap.Jobs)
+	}
+}
+
+// The top level is a container too, and the one whose loss costs everything.
+func TestFetcherNamesTheTopLevelWhenItCannotBeListed(t *testing.T) {
+	s := hardened(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/json" && strings.Contains(r.URL.RawQuery, "tree=jobs") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		s.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := NewFetcher(client).Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Controller.Unlisted) != 1 || snap.Controller.Unlisted[0] != rootContainer {
+		t.Errorf("unlisted = %v, want the top level", snap.Controller.Unlisted)
+	}
+}
+
+// A complete walk says so explicitly: a missing key would read as incomplete.
+func TestFetcherRecordsACompleteJobList(t *testing.T) {
+	snap := fetchFrom(t, hardened(t))
+	if !snap.Controller.Available[AvailJobs] || len(snap.Controller.Unlisted) != 0 {
+		t.Errorf("available = %v, unlisted = %v", snap.Controller.Available, snap.Controller.Unlisted)
+	}
+}

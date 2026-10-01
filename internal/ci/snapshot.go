@@ -55,6 +55,12 @@ type Controller struct {
 	UpdateSite  UpdateSite      `json:"updateSite"`
 	Available   map[string]bool `json:"available"`
 	Errors      []string        `json:"errors,omitempty"`
+	// Unlisted names every container whose job list could not be read: "/"
+	// for the top level, a folder's full name otherwise. The jobs inside one
+	// are missing from Jobs rather than judged, so a snapshot with any is
+	// incomplete — available["jobs"] is false — and a scan of it exits 2
+	// unless scan.allowIncomplete accepts that.
+	Unlisted []string `json:"unlisted,omitempty"`
 }
 
 // Security is what can be established about the controller's posture: flags

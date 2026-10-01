@@ -42,6 +42,12 @@ scan:
   insecure: false
   allowPlaintext: false
 
+  # Accept a scan in which some folder could not be listed. Its jobs are absent
+  # from the report rather than judged, so by default such a scan exits 2 — the
+  # report is still written, and the warnings name every folder that was
+  # missed. Set this only for a folder the scanning account is meant not to see.
+  allowIncomplete: false
+
 # The numeric knobs the policies read, handed to Rego verbatim as input.config
 # so that no control hard-codes a number.
 thresholds:

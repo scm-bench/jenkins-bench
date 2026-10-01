@@ -237,6 +237,14 @@ func writeSummary(w io.Writer, rep *engine.Report, p painter, width int) {
 	if rep.Coverage.NoJobsAudited() {
 		summaryLine(w, p, width, ansiYellow, "no job was evaluated: nothing job-scope was audited")
 	}
+	if !rep.Coverage.Complete {
+		text := "the job list is incomplete: the jobs in a folder that could not be listed are missing, not judged"
+		if n := len(rep.Coverage.Unlisted); n > 0 {
+			text = fmt.Sprintf("the job list is incomplete: %s could not be listed, and the jobs in them are missing, not judged",
+				console.Pluralize(n, "container"))
+		}
+		summaryLine(w, p, width, ansiYellow, text)
+	}
 }
 
 // failedControls counts the distinct controls with at least one failure —

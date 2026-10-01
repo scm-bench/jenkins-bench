@@ -31,11 +31,22 @@ func controller(t *testing.T, anonymousAllowed bool) *httptest.Server {
 // inside of a JSON array.
 func controllerWithJobs(t *testing.T, anonymousAllowed bool, jobs string) *httptest.Server {
 	t.Helper()
+	return controllerServing(t, anonymousAllowed, jobs, nil)
+}
+
+// controllerServing is controllerWithJobs plus handlers for paths of the
+// test's own, which win over the stand-in's.
+func controllerServing(t *testing.T, anonymousAllowed bool, jobs string, extra map[string]http.HandlerFunc) *httptest.Server {
+	t.Helper()
 	instanceBody := `{"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"jobs":[` + jobs + `]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("the scan issued a %s to %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if h, ok := extra[r.URL.Path]; ok {
+			h(w, r)
 			return
 		}
 		_, _, authed := r.BasicAuth()
@@ -120,7 +131,7 @@ func TestScanOfControllerControlsAloneNeedsNoJobs(t *testing.T) {
 func TestScanWhoseJobsWereAllSkippedExitsTwo(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
 	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
-		"controller":{"available":{"root":true}},
+		"controller":{"available":{"root":true,"jobs":true}},
 		"jobs":[{"fullName":"old","disabled":true,"available":{"api":true,"config":true},"definition":{"source":"ui"}}]}`
 	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
 		t.Fatal(err)
@@ -261,7 +272,7 @@ func TestScanReportsManualForWhatItCouldNotRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blind.json")
 	blind := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
-		"controller":{"available":{"root":false},"errors":["the instance API could not be read (HTTP 403)"]},
+		"controller":{"available":{"root":false,"jobs":true},"errors":["the instance API could not be read (HTTP 403)"]},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false},"errors":["HTTP 403"]}]}`
 	if err := os.WriteFile(path, []byte(blind), 0o600); err != nil {
 		t.Fatal(err)
@@ -289,7 +300,7 @@ func TestScanReportsManualForWhatItCouldNotRead(t *testing.T) {
 func TestScanFailsWhenTooMuchWentUnread(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "blind.json")
 	blind := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
-		"controller":{"available":{"root":false}},
+		"controller":{"available":{"root":false,"jobs":true}},
 		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
 	if err := os.WriteFile(path, []byte(blind), 0o600); err != nil {
 		t.Fatal(err)
@@ -499,5 +510,69 @@ func TestFailureSummaryCountsDistinctResources(t *testing.T) {
 				t.Errorf("failureSummary() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A folder whose listing fails takes every job inside it out of the scan.
+// v0.1 turned the failure into a warning and carried on: the remaining jobs
+// scored 100/100 and the scan exited 0, with the folder that went unread being
+// precisely the one nobody was allowed to look into.
+func TestScanThatCouldNotListAFolderExitsTwo(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := controllerServing(t, false,
+				hardenedJob+`,{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"prod","fullName":"prod","url":"http://x/job/prod/"}`,
+				map[string]http.HandlerFunc{
+					"/job/prod/api/json": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) },
+				})
+			out, err := runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color",
+				"--set", "scan.timeout=5s")
+			if code := ExitCode(err); code != ExitError {
+				t.Fatalf("exit code = %d (%v), want %d: the jobs in prod were never seen\n%s", code, err, ExitError, out)
+			}
+			if !strings.Contains(err.Error(), "prod") {
+				t.Errorf("the message should name the folder that could not be listed: %v", err)
+			}
+			// The rest of the controller was audited, and the report says so.
+			if !strings.Contains(out, "SCORE") || !strings.Contains(out, "prod") {
+				t.Errorf("the report should still be written, naming the folder:\n%s", out)
+			}
+
+			// An operator who knows the folder is off-limits can accept a
+			// partial scan, deliberately and in writing.
+			_, err = runScanCmd(t, "scan", "--url", srv.URL, "--username", "u", "--token", "t", "--no-color",
+				"--set", "scan.allowIncomplete=true", "--set", "scan.timeout=5s")
+			if err != nil {
+				t.Errorf("scan.allowIncomplete should accept the partial scan: %v", err)
+			}
+		})
+	}
+}
+
+// A snapshot that does not record its job list as complete — written by an
+// older build, or edited — proves nothing about the jobs it would have held.
+func TestScanOfASnapshotWithoutAListingRecordIsIncomplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	snap := `{"schemaVersion":"1","metadata":{"tool":"jenkins-bench","platform":"jenkins"},
+		"controller":{"available":{"root":true}},
+		"jobs":[{"fullName":"app","available":{"api":true,"config":false}}]}`
+	if err := os.WriteFile(path, []byte(snap), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runScanCmd(t, "scan", "--snapshot-in", path, "--no-color")
+	if code := ExitCode(err); code != ExitError {
+		t.Fatalf("exit code = %d (%v), want %d", code, err, ExitError)
+	}
+	if !strings.Contains(err.Error(), "allowIncomplete") {
+		t.Errorf("the message should name the way to accept it: %v", err)
+	}
+}
+
+func TestIncompleteSummaryNamesTheContainers(t *testing.T) {
+	got := incompleteSummary(engine.Coverage{Unlisted: []string{"/", "prod", "a", "b", "c", "d"}})
+	for _, want := range []string{"6 containers", "the top level", `"prod"`, "and 1 more", "scan.allowIncomplete"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary %q should contain %q", got, want)
+		}
 	}
 }

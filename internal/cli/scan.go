@@ -379,6 +379,13 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		}
 	}
 
+	// Part of the job tree could not be listed, so the jobs in it are absent
+	// from the report rather than judged. A warning alone is what v0.1 did,
+	// and the folder nobody could read then scored 100/100 by omission.
+	if !rep.Coverage.Complete && !opts.scan.AllowIncomplete {
+		return &exitCodeError{code: ExitError, msg: incompleteSummary(rep.Coverage)}
+	}
+
 	if opts.scan.MaxManual >= 0 {
 		// Only automated controls count against the gate. The bundle ships
 		// controls that are MANUAL by design (automated: false, no API can
@@ -420,6 +427,32 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		}
 	}
 	return nil
+}
+
+// incompleteSummary names what the scan could not list, and both ways on.
+func incompleteSummary(c engine.Coverage) string {
+	if len(c.Unlisted) == 0 {
+		// A snapshot from before the job list's completeness was recorded,
+		// or one somebody edited.
+		return "the snapshot does not record its job list as complete, so jobs may be missing from this report\n" +
+			"capture it again with this build, or set scan.allowIncomplete: true to accept it as it is"
+	}
+	names := make([]string, len(c.Unlisted))
+	for i, n := range c.Unlisted {
+		if n == "/" {
+			names[i] = "the top level"
+			continue
+		}
+		names[i] = fmt.Sprintf("%q", n)
+	}
+	const shown = 5
+	list := strings.Join(names, ", ")
+	if len(names) > shown {
+		list = strings.Join(names[:shown], ", ") + fmt.Sprintf(" and %d more", len(names)-shown)
+	}
+	return fmt.Sprintf("the job list is incomplete: %s could not be listed (%s), so the jobs in them were not evaluated\n"+
+		"the report covers everything else; grant the token Job/Read there, or set scan.allowIncomplete: true to accept a partial scan",
+		console.Pluralize(len(c.Unlisted), "container"), list)
 }
 
 // failureSummary counts controls, not findings: one misconfiguration across

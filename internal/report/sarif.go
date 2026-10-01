@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -182,8 +183,16 @@ func writeSARIF(w io.Writer, rep *engine.Report, opts Options) error {
 			Text: "No job was evaluated, so nothing job-scope was audited; a token without Job/Read is shown an empty job list.",
 		}})
 	}
+	// Likewise a folder that could not be listed: its jobs are absent from
+	// the results, and absence is what a fixed alert looks like. The
+	// folders themselves are already named among the scan warnings above.
+	if !rep.Coverage.Complete {
+		notifications = append(notifications, sarifNotification{Level: "error", Message: sarifText{
+			Text: fmt.Sprintf("The job list is incomplete: %d container(s) could not be listed, and the jobs in them were not evaluated.", len(rep.Coverage.Unlisted)),
+		}})
+	}
 	run.Invocations = []sarifInvocation{{
-		ExecutionSuccessful:        len(rep.Errors) == 0 && !rep.Coverage.NoJobsAudited(),
+		ExecutionSuccessful:        len(rep.Errors) == 0 && !rep.Coverage.NoJobsAudited() && rep.Coverage.Complete,
 		ToolExecutionNotifications: notifications,
 	}}
 

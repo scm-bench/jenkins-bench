@@ -47,6 +47,7 @@ func sample() *engine.Report {
 		},
 	}
 	rep.Score = engine.Compute(rep.Findings)
+	rep.Coverage = engine.Coverage{Jobs: 3, JobControls: 5, Complete: true}
 	return rep
 }
 
@@ -511,7 +512,7 @@ func TestEveryLineFitsTheTerminalWidth(t *testing.T) {
 // closing every job alert as fixed.
 func TestNoJobsAuditedIsVisibleInEveryFormat(t *testing.T) {
 	rep := sample()
-	rep.Coverage = engine.Coverage{Jobs: 0, JobControls: 5}
+	rep.Coverage = engine.Coverage{Jobs: 0, JobControls: 5, Complete: true}
 
 	var table bytes.Buffer
 	if err := Write(&table, rep, Options{Format: FormatTable, Width: 100}); err != nil {
@@ -545,5 +546,40 @@ func TestNoJobsAuditedIsVisibleInEveryFormat(t *testing.T) {
 	}
 	if !strings.Contains(js.String(), `"jobControls": 5`) {
 		t.Errorf("the JSON report should carry the coverage:\n%s", js.String())
+	}
+}
+
+// A folder that could not be listed is as invisible in a report as a job with
+// nothing wrong — unless the report says so, in every format.
+func TestIncompleteListingIsVisibleInEveryFormat(t *testing.T) {
+	rep := sample()
+	rep.Coverage = engine.Coverage{Jobs: 3, JobControls: 5, Complete: false, Unlisted: []string{"prod"}}
+
+	var table bytes.Buffer
+	if err := Write(&table, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(table.String(), "the job list is incomplete: 1 container could not be listed") {
+		t.Errorf("the table should say the job list is incomplete:\n%s", table.String())
+	}
+
+	var sarif bytes.Buffer
+	if err := Write(&sarif, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sarif.String(), `"executionSuccessful": false`) {
+		t.Errorf("an incomplete scan did not execute successfully:\n%s", sarif.String())
+	}
+	if !strings.Contains(sarif.String(), "could not be listed") {
+		t.Error("SARIF should carry a notification saying why")
+	}
+
+	complete := sample()
+	sarif.Reset()
+	if err := Write(&sarif, complete, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sarif.String(), `"executionSuccessful": true`) {
+		t.Error("a complete scan with no policy errors executed successfully")
 	}
 }
