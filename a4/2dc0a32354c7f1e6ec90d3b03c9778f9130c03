@@ -1,0 +1,27 @@
+examples/config.yaml
+  s_48d8fa1c49bfb6::t_146bb1e7515c46 39-44
+internal/cli/scan.go
+  s_48d8fa1c49bfb6::t_7489c9c6a5b101 144-154,227-233,235-236
+internal/cli/trace_test.go
+  s_48d8fa1c49bfb6::t_6867b428995268 225-249
+internal/config/config.go
+  s_48d8fa1c49bfb6::t_7e072ca448063e 147-151,199,317-321
+internal/config/config_test.go
+  s_48d8fa1c49bfb6::t_3f6c132cfe4d5e 224-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a42dc0a32354c7f1e6ec90d3b03c9778f9130c03",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
