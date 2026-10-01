@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"strings"
 	"testing"
@@ -862,5 +863,121 @@ func TestTableSetsAcceptedFindingsApart(t *testing.T) {
 	}
 	if !strings.Contains(details.String(), "accepted until 2027-03-31") {
 		t.Errorf("the details view should carry the note in the finding cell:\n%s", details.String())
+	}
+}
+
+type junitDoc struct {
+	Tests      int `xml:"tests,attr"`
+	Failures   int `xml:"failures,attr"`
+	Skipped    int `xml:"skipped,attr"`
+	Properties struct {
+		Property []struct {
+			Name  string `xml:"name,attr"`
+			Value string `xml:"value,attr"`
+		} `xml:"property"`
+	} `xml:"properties"`
+	Suites []struct {
+		Name  string `xml:"name,attr"`
+		Cases []struct {
+			Name      string `xml:"name,attr"`
+			ClassName string `xml:"classname,attr"`
+			Failure   *struct {
+				Type string `xml:"type,attr"`
+				Text string `xml:",chardata"`
+			} `xml:"failure"`
+			Skipped *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"skipped"`
+		} `xml:"testcase"`
+	} `xml:"testsuite"`
+}
+
+func junitOf(t *testing.T, rep *engine.Report) (junitDoc, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatJUnit, ToolVersion: "1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	var doc junitDoc
+	if err := xml.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatalf("JUnit output does not parse: %v\n%s", err, buf.String())
+	}
+	return doc, buf.String()
+}
+
+// JUnit is for the CI systems that draw test results natively. Every finding
+// is a test case, so the totals add up and nothing is silently dropped; only
+// an unaccepted FAIL is a failure.
+func TestJUnitCountsEveryFindingAndFailsOnlyRealFailures(t *testing.T) {
+	rep := sample()
+	accepted := finding("CIS-2.3.1", "vendor/job", engine.ResourceJob, engine.StatusFail, "HIGH")
+	accepted.Waiver = &engine.Waiver{Reason: "migration", Expires: "2027-01-01"}
+	rep.Findings = append(rep.Findings, accepted)
+	doc, raw := junitOf(t, rep)
+
+	// sample(): FAIL controller, PASS api-service, FAIL legacy-build, MANUAL
+	// legacy-build, NA disabled-job — plus the accepted failure.
+	if doc.Tests != 6 || doc.Failures != 2 || doc.Skipped != 3 {
+		t.Errorf("totals tests=%d failures=%d skipped=%d, want 6/2/3\n%s", doc.Tests, doc.Failures, doc.Skipped, raw)
+	}
+	cases := map[string]string{}
+	for _, s := range doc.Suites {
+		if !strings.Contains(s.Name, ": ") {
+			t.Errorf("suite name %q should be \"ID: title\"", s.Name)
+		}
+		for _, c := range s.Cases {
+			key := c.ClassName + " " + c.Name
+			switch {
+			case c.Failure != nil:
+				cases[key] = "failure:" + c.Failure.Type
+				if !strings.Contains(c.Failure.Text, "Fix: ") {
+					t.Errorf("failure text %q carries no fix", c.Failure.Text)
+				}
+			case c.Skipped != nil:
+				cases[key] = "skipped:" + c.Skipped.Message
+			default:
+				cases[key] = "pass"
+			}
+		}
+	}
+	for key, want := range map[string]string{
+		"CIS-2.1.6 controller":           "failure:HIGH",
+		"CIS-2.3.1 legacy-build":         "failure:HIGH",
+		"CIS-2.3.1 platform/api-service": "pass",
+		"CIS-2.3.5 legacy-build":         "skipped:MANUAL: one sentence about this resource",
+		"CIS-2.2.3 disabled-job":         "skipped:not applicable: one sentence about this resource",
+		"CIS-2.3.1 vendor/job":           "skipped:FAIL, accepted until 2027-01-01: migration",
+	} {
+		if cases[key] != want {
+			t.Errorf("%s = %q, want %q", key, cases[key], want)
+		}
+	}
+	props := map[string]string{}
+	for _, p := range doc.Properties.Property {
+		props[p.Name] = p.Value
+	}
+	if props["toolVersion"] != "1.2.3" || props["platform"] != "jenkins" || props["baseUrl"] == "" || props["score"] == "" {
+		t.Errorf("properties = %v", props)
+	}
+}
+
+// Jobs a scan never saw have no test case to fail, so a scan that could not
+// list a folder, judged no job, or lost a policy carries failing cases of its
+// own rather than rendering as a clean run.
+func TestJUnitFailsAScanThatCouldNotDoItsJob(t *testing.T) {
+	rep := sample()
+	rep.Coverage = engine.Coverage{Jobs: 0, JobControls: 5, Complete: false, Unlisted: []string{"locked"}}
+	rep.Errors = []string{"CIS-2.3.1 on x: policy evaluation failed"}
+	_, raw := junitOf(t, rep)
+	for _, want := range []string{`name="scan"`, `name="locked" classname="scan.coverage"`, `name="jobs" classname="scan.coverage"`, `classname="scan.policy"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("JUnit is missing %s:\n%s", want, raw)
+		}
+	}
+
+	unrecorded := sample()
+	unrecorded.Coverage = engine.Coverage{Jobs: 3, JobControls: 5}
+	if _, raw := junitOf(t, unrecorded); !strings.Contains(raw, `name="job list" classname="scan.coverage"`) {
+		t.Errorf("a snapshot with no completeness record should fail in JUnit:\n%s", raw)
 	}
 }

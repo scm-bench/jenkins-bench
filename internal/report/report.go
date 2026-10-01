@@ -1,5 +1,5 @@
-// Package report renders an evaluation as a human table, machine JSON, or
-// SARIF for CI ingestion.
+// Package report renders an evaluation as a human table, machine JSON, SARIF
+// for code scanning, or JUnit XML for a CI's own test view.
 package report
 
 import (
@@ -15,6 +15,7 @@ const (
 	FormatTable = "table"
 	FormatJSON  = "json"
 	FormatSARIF = "sarif"
+	FormatJUnit = "junit"
 )
 
 // Options controls rendering.
@@ -69,7 +70,7 @@ type Options struct {
 const DefaultMaxResources = 0
 
 // Formats lists the supported output formats, for flag help and validation.
-func Formats() []string { return []string{FormatTable, FormatJSON, FormatSARIF} }
+func Formats() []string { return []string{FormatTable, FormatJSON, FormatSARIF, FormatJUnit} }
 
 // Write renders the report in the requested format.
 func Write(w io.Writer, rep *engine.Report, opts Options) error {
@@ -80,6 +81,8 @@ func Write(w io.Writer, rep *engine.Report, opts Options) error {
 		return writeJSON(w, rep)
 	case FormatSARIF:
 		return writeSARIF(w, rep, opts)
+	case FormatJUnit:
+		return writeJUnit(w, rep, opts)
 	default:
 		return fmt.Errorf("unknown output format %q; want one of %s", opts.Format, strings.Join(Formats(), ", "))
 	}
