@@ -1,0 +1,21 @@
+CONTRIBUTING.md
+  s_48d8fa1c49bfb6::t_069c0178fac707 40-41,55-65,154-161
+internal/checks/policies/lib/common.rego
+  s_48d8fa1c49bfb6::t_f3518136a6986d 80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a23f4d9c35dd52bf64f81a09a3ffc4722171ba02",
+  "prompts": {},
+  "sessions": {
+    "s_48d8fa1c49bfb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b91ffb09-1c76-4e54-9777-4525648b2969",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
