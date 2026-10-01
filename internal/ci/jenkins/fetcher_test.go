@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/scm-bench/jenkins-bench/internal/ci"
 )
@@ -1083,5 +1085,69 @@ func TestFetcherReadsAMavenJob(t *testing.T) {
 </maven2-moduleset>`)
 	if job.Definition.Source != ci.SourceUI || !job.TriggersKnown {
 		t.Errorf("job = %+v, want ui with its triggers known", job)
+	}
+}
+
+// A proxy that answers every folder URL with the root listing made the walk
+// recurse until the deadline: the audit counted 35,933 listing requests in two
+// seconds against a stand-in. Jenkins never lists an item outside the folder
+// that holds it, so a listing that does is not the folder's, and the walk
+// stops there — and says the job list is incomplete.
+func TestFetcherStopsAtAListingThatIsNotTheFolders(t *testing.T) {
+	var listings atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "tree=jobs") {
+			listings.Add(1)
+			fmt.Fprint(w, `{"jobs":[{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"a","fullName":"a","jobs":[]}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"_class":"hudson.model.Hudson","useSecurity":true,"useCrumbs":true,"numExecutors":0}`)
+	}))
+	defer srv.Close()
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snap, err := NewFetcher(c).Fetch(ctx)
+	if err != nil {
+		t.Fatalf("Fetch: %v (after %d listings)", err, listings.Load())
+	}
+	if n := listings.Load(); n > 3 {
+		t.Errorf("%d listing requests; a listing that repeats its parent's must stop the walk", n)
+	}
+	if snap.Controller.Available[AvailJobs] || len(snap.Controller.Unlisted) != 1 || snap.Controller.Unlisted[0] != "a" {
+		t.Errorf("available = %v, unlisted = %v; folder a was not truly listed", snap.Controller.Available, snap.Controller.Unlisted)
+	}
+}
+
+// Names that grow without repeating keep the invariant and still never end;
+// no real controller nests folders this deep.
+func TestFetcherStopsAtAnImplausibleDepth(t *testing.T) {
+	var listings atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "tree=jobs") {
+			listings.Add(1)
+			parent := strings.TrimSuffix(strings.TrimPrefix(strings.ReplaceAll(r.URL.Path, "/job/", "/"), "/"), "/api/json")
+			child := "f"
+			if parent != "" && parent != "api/json" {
+				child = parent + "/f"
+			}
+			fmt.Fprintf(w, `{"jobs":[{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"f","fullName":%q,"jobs":[]}]}`, child)
+			return
+		}
+		fmt.Fprint(w, `{"_class":"hudson.model.Hudson","useSecurity":true,"useCrumbs":true,"numExecutors":0}`)
+	}))
+	defer srv.Close()
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	snap, err := NewFetcher(c).Fetch(ctx)
+	if err != nil {
+		t.Fatalf("Fetch: %v (after %d listings)", err, listings.Load())
+	}
+	if n := listings.Load(); n > int64(maxFolderDepth)+2 {
+		t.Errorf("%d listing requests; the walk should stop at depth %d", n, maxFolderDepth)
+	}
+	if snap.Controller.Available[AvailJobs] {
+		t.Error("a walk cut short is an incomplete job list")
 	}
 }

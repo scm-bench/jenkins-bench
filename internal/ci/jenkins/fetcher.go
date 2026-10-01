@@ -316,11 +316,17 @@ func jobPath(fullName string) string {
 	return b.String()
 }
 
+// maxFolderDepth is how deep the walk follows folders. Jenkins puts no limit
+// on nesting, and no controller in use comes near this; a tree that does is
+// something answering on the controller's behalf.
+const maxFolderDepth = 64
+
 // listJobs walks folders recursively. A nested tree= expression truncates at
 // whatever depth it was written for, silently losing deeper folders.
 //
-// container is the folder's full name, "" for the top level.
-func (f *Fetcher) listJobs(ctx context.Context, container string, out *[]item) error {
+// container is the folder's full name, "" for the top level; depth is how many
+// folders deep it is.
+func (f *Fetcher) listJobs(ctx context.Context, container string, depth int, out *[]item) error {
 	var listing jobListing
 	prefix := ""
 	if container != "" {
@@ -337,19 +343,32 @@ func (f *Fetcher) listJobs(ctx context.Context, container string, out *[]item) e
 		// incomplete: Controller.Unlisted carries the name to the exit code.
 		// A token Jenkins filters the folder's contents for gets a 200 with
 		// fewer jobs, not an error, and lands nowhere near here.
-		name := container
-		if name == "" {
-			name = rootContainer
-		}
-		f.mu.Lock()
-		f.unlisted = append(f.unlisted, name)
-		f.mu.Unlock()
-		f.warn("the job list of %s could not be read (%v); the jobs in it are missing from this scan", describeContainer(container), err)
+		f.unlist(container, "the job list of %s could not be read (%v); the jobs in it are missing from this scan", describeContainer(container), err)
 		return nil
 	}
+
+	// Jenkins lists an item only inside the folder that holds it, so its
+	// full name is the folder's plus one segment. A listing that breaks that
+	// is not this folder's — a proxy answering every URL with the same page
+	// made the walk recurse until the deadline, 35,933 requests in two
+	// seconds against the audit's stand-in — and none of it is trusted.
+	for _, it := range listing.Jobs {
+		if !childOf(container, it.FullName) {
+			f.unlist(container, "the job list of %s holds %q, which is not inside it, so it is not that folder's list — "+
+				"something other than the controller may be answering; the jobs in it are missing from this scan",
+				describeContainer(container), it.FullName)
+			return nil
+		}
+	}
+
 	for _, it := range listing.Jobs {
 		if isContainer(it) {
-			if err := f.listJobs(ctx, it.FullName, out); err != nil {
+			if depth+1 > maxFolderDepth {
+				f.unlist(it.FullName, "%s is nested more than %d folders deep, past which the walk stops; the jobs in it are missing from this scan",
+					describeContainer(it.FullName), maxFolderDepth)
+				continue
+			}
+			if err := f.listJobs(ctx, it.FullName, depth+1, out); err != nil {
 				return err
 			}
 			continue
@@ -359,6 +378,33 @@ func (f *Fetcher) listJobs(ctx context.Context, container string, out *[]item) e
 		*out = append(*out, it)
 	}
 	return nil
+}
+
+// childOf reports whether fullName is an item directly inside container.
+func childOf(container, fullName string) bool {
+	if fullName == "" {
+		return false
+	}
+	rest := fullName
+	if container != "" {
+		var ok bool
+		if rest, ok = strings.CutPrefix(fullName, container+"/"); !ok {
+			return false
+		}
+	}
+	return rest != "" && !strings.Contains(rest, "/")
+}
+
+// unlist records a container whose jobs the scan could not list, and warns.
+func (f *Fetcher) unlist(container, format string, args ...any) {
+	name := container
+	if name == "" {
+		name = rootContainer
+	}
+	f.mu.Lock()
+	f.unlisted = append(f.unlisted, name)
+	f.mu.Unlock()
+	f.warn(format, args...)
 }
 
 // describeContainer names a container in a sentence.
@@ -371,7 +417,7 @@ func describeContainer(container string) string {
 
 func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]ci.Job, error) {
 	var items []item
-	if err := f.listJobs(ctx, "", &items); err != nil {
+	if err := f.listJobs(ctx, "", 0, &items); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
