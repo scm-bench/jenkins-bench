@@ -372,7 +372,10 @@ need no file: `--set scan.failOn=none`. See
 [`examples/config.yaml`](examples/config.yaml) for the reference, including
 `auditPluginNames` (which plugins satisfy the logging control) and
 `thresholds.updateSiteMaxAgeDays` (how stale update-centre data may be before
-plugin currency stops being answerable).
+plugin currency stops being answerable), and `scan.progress` — `full` prints
+every request as `-v` does, `compact` (the default) one self-overwriting line on
+a terminal, `off` neither; the closing account of what was sent is printed
+whatever it says.
 
 ### Transport
 
@@ -397,7 +400,8 @@ until a stated date — is accepted in the config:
 ```yaml
 exceptions:
   - control: CIS-2.3.5              # exact control ID
-    resources: [platform/legacy-*]   # globs over job full names; * stops at "/";
+    resources: [platform/legacy-*]   # globs over job full names, case-sensitive as
+                                     # Jenkins names are; * stops at "/";
                                      # "controller" for a controller-scope control
     reason: Vendor job, replaced in Q1
     owner: platform-team@example.com # optional
@@ -446,6 +450,30 @@ describes version 1.
 A `FAIL` here means exactly what a `FAIL` from
 [bitbucket-bench](https://github.com/scm-bench/bitbucket-bench) means.
 
+## Upgrading from 0.1
+
+This release changes verdicts on unchanged controllers. Each change is a false
+`PASS` or a false `NA` removed, or a guess replaced by `MANUAL`:
+
+| Where | 0.1 said | Now | Why |
+| --- | --- | --- | --- |
+| CIS-2.3.5, a job with a Generic Webhook Trigger | PASS | FAIL | its endpoint starts the build with a token and no login |
+| CIS-2.3.5, a multibranch project | PASS | MANUAL | its triggers are in the branch jobs, which a scan does not read |
+| CIS-2.3.5, a trigger class the tool does not know | PASS | MANUAL | whether it authenticates is unknown |
+| CIS-2.3.1, a multibranch project whose script comes from the controller | PASS | FAIL | inline-pipeline and pipeline-multibranch-defaults factories |
+| CIS-2.3.1 / CIS-2.1.2, a multibranch project with an unknown factory | PASS / NA | MANUAL | the default factory is no longer assumed |
+| CIS-2.3.1, a Maven job | MANUAL | FAIL | its build steps are form fields |
+| CIS-2.1.2, unsandboxed Groovy outside the pipeline definition | NA | FAIL | System Groovy, Groovy Postbuild, Active Choices, Job DSL |
+| CIS-2.1.6, behind a proxy that redirects anonymous requests | FAIL | MANUAL | a sign-in page is not anonymous access |
+| any job-scope control, a config.xml URL answered by an HTML page | PASS or NA | MANUAL | the page is not a configuration |
+| the score | rounded | floored | a failing finding no longer prints 100 |
+| a scan that evaluated no job, or could not list a folder | exit 0 or 1 | exit 2 | it cannot vouch for what it covered |
+
+Snapshots are schema version 2; a version 1 snapshot is refused — capture again.
+`--format` still works, deprecated in favour of `-o`. SARIF results now carry
+physical locations, so code scanning shows them for the first time; MANUAL
+results move to rules of their own (`<ID>/manual`).
+
 ## Contributing
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). The most valuable contribution
@@ -455,7 +483,9 @@ to match the platform. `hack/recon/` holds the harness that measured everything
 this tool believes about the Jenkins API, so a claim can be rechecked rather
 than trusted, and [`hack/e2e/`](hack/e2e) boots a controller with every
 control in a known state and checks each verdict, for each kind of token,
-against what the fixture actually is.
+against what the fixture actually is. It has passed on Jenkins 2.580.1 (LTS);
+running it against another version and reporting what differed is the most
+valuable contribution there is.
 
 ## License
 

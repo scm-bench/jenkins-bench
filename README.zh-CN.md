@@ -274,6 +274,9 @@ score = floor(Σ weight(passed) / Σ weight(passed + failed) × 100)
 `jenkins-bench init` 写出一份每个默认值都写明的带注释 `jenkins-bench.yaml`；
 `scan` 会自己找到它（并在 stderr 上说出来）。一次性的覆盖不需要文件：
 `--set scan.failOn=none`。参考 [`examples/config.yaml`](examples/config.yaml)。
+`scan.progress` 决定扫描运行时在 stderr 上说多少：`full` 像 `-v` 一样打印每个请求，
+`compact`（默认）在终端上显示一行自我覆盖的进度，`off` 两者都不打印；结束时对已发送
+请求的清点无论如何都会打印。
 
 ### 传输
 
@@ -294,8 +297,8 @@ score = floor(Σ weight(passed) / Σ weight(passed + failed) × 100)
 ```yaml
 exceptions:
   - control: CIS-2.3.5              # 精确的控制项 ID
-    resources: [platform/legacy-*]   # 匹配任务完整名称的通配符；* 不跨越 "/"；
-                                     # 控制器级控制项用 "controller"
+    resources: [platform/legacy-*]   # 匹配任务完整名称的通配符，区分大小写（与 Jenkins
+                                     # 名称一致）；* 不跨越 "/"；控制器级控制项用 "controller"
     reason: Vendor job, replaced in Q1
     owner: platform-team@example.com # 可选
     expires: 2027-03-31              # 当天（UTC）结束前有效
@@ -336,6 +339,29 @@ Jenkins API ──► fetcher ──► snapshot.json ──► Rego 策略 ─�
 这里的 `FAIL` 与 [bitbucket-bench](https://github.com/scm-bench/bitbucket-bench)
 的 `FAIL` 含义完全相同。
 
+## 从 0.1 升级
+
+本版本会在控制器未变的情况下改变判定结果。每一处改变都是去掉一个误报的 `PASS` 或
+`NA`，或者用 `MANUAL` 代替一次猜测：
+
+| 位置 | 0.1 的结论 | 现在 | 原因 |
+| --- | --- | --- | --- |
+| CIS-2.3.5，带 Generic Webhook Trigger 的任务 | PASS | FAIL | 其端点凭 token 即可启动构建，无需登录 |
+| CIS-2.3.5，多分支项目 | PASS | MANUAL | 触发器在分支任务里，扫描不读取分支任务 |
+| CIS-2.3.5，工具不认识的触发器类 | PASS | MANUAL | 无法确知它是否鉴权 |
+| CIS-2.3.1，脚本来自控制器的多分支项目 | PASS | FAIL | inline-pipeline 与 pipeline-multibranch-defaults 工厂 |
+| CIS-2.3.1 / CIS-2.1.2，工厂未知的多分支项目 | PASS / NA | MANUAL | 不再假定是默认工厂 |
+| CIS-2.3.1，Maven 任务 | MANUAL | FAIL | 构建步骤是表单字段 |
+| CIS-2.1.2，流水线定义之外未开沙箱的 Groovy | NA | FAIL | System Groovy、Groovy Postbuild、Active Choices、Job DSL |
+| CIS-2.1.6，会重定向匿名请求的代理之后 | FAIL | MANUAL | 登录页不等于匿名访问 |
+| 任何任务级控制项，config.xml 地址返回 HTML 页面 | PASS 或 NA | MANUAL | 那个页面不是配置文件 |
+| 分数 | 四舍五入 | 向下取整 | 有失败项时不再显示 100 |
+| 没有评估任何任务、或列不出某个文件夹的扫描 | 退出码 0 或 1 | 退出码 2 | 它无法为覆盖范围担保 |
+
+快照为 schema 第 2 版；第 1 版快照会被拒绝 —— 请重新捕获。`--format` 仍可使用，
+但已弃用，请改用 `-o`。SARIF 结果现在带有物理位置，代码扫描第一次能显示它们；
+MANUAL 结果移到了各自独立的规则（`<ID>/manual`）。
+
 ## 参与贡献
 
 从 [CONTRIBUTING.md](CONTRIBUTING.md) 开始。最有价值的贡献是拿它对着一台
@@ -343,7 +369,8 @@ Jenkins API ──► fetcher ──► snapshot.json ──► Rego 策略 ─�
 自洽，不证明与真实平台一致。`hack/recon/` 里是测出本工具对 Jenkins API
 全部认知的那套装置，任何论断都可以复查，而不必信任；[`hack/e2e/`](hack/e2e)
 则启动一台每条控制项都处于已知状态的控制器，针对每一种 token，把每个判定与
-夹具的真实情况逐一核对。
+夹具的真实情况逐一核对。它已在 Jenkins 2.580.1（LTS）上通过；拿它对照另一个版本
+运行并报告差异，是最有价值的贡献。
 
 ## 许可
 
