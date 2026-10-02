@@ -1,0 +1,347 @@
+# The end-to-end fixture: one controller, every automated control in a known
+# state, and the shapes the v0.1 audit found the fetcher misreading — written
+# by the plugins themselves (through Job DSL), not by hand, so the config.xml
+# the scan reads is the one a real controller serves.
+#
+# Strings containing "e2e-planted" are secrets planted on purpose. verify.sh
+# greps every snapshot for each of them: a snapshot is written to disk and
+# passed around, and none of these may ever reach one.
+#
+# expected.py states the verdicts this fixture should produce, per token. A
+# change here that alters a verdict needs a matching change there, with the
+# reasoning.
+jenkins:
+  systemMessage: "jenkins-bench e2e fixture"
+
+  # Two executors on the built-in node: builds run on the controller, the
+  # classic misconfiguration CIS-2.2.3 exists for.
+  numExecutors: 2
+  slaveAgentPort: 50000
+
+  # An update site that never answers, so the controller holds no update-centre
+  # data: every plugin reports hasUpdate false because nothing ever said
+  # otherwise. Plugin currency must be MANUAL here, not PASS — and pinning it
+  # makes the verdict independent of whether this machine can reach
+  # updates.jenkins.io today.
+  updateCenter:
+    sites:
+      - id: "default"
+        url: "http://127.0.0.1:9/update-center.json"
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${ADMIN_PASSWORD}"
+        - id: "reader"
+          password: "${READER_PASSWORD}"
+        - id: "extended"
+          password: "${EXTENDED_PASSWORD}"
+        - id: "sysread"
+          password: "${SYSREAD_PASSWORD}"
+        - id: "nojob"
+          password: "${NOJOB_PASSWORD}"
+
+  # One account per question the README's permission table answers. up.sh mints
+  # an API token for each; the scan never sees a password.
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - user:
+            name: "admin"
+            permissions:
+              - "Overall/Administer"
+        # The least-privilege scanning account: every job-scope control is
+        # MANUAL for it, because config.xml needs Job/ExtendedRead.
+        - user:
+            name: "reader"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+        # What the README recommends for a scan that can judge jobs.
+        - user:
+            name: "extended"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+              - "Job/ExtendedRead"
+        # Overall/SystemRead: the read-only administrator. It reads the plugin
+        # manager — which is what v0.1 took as proof of Overall/Administer.
+        - user:
+            name: "sysread"
+            permissions:
+              - "Overall/Read"
+              - "Overall/SystemRead"
+              - "Job/Read"
+        # No Job/Read at all: the controller answers the job listing with 200
+        # and an empty list. v0.1 scored that 100/100 and exited 0.
+        - user:
+            name: "nojob"
+            permissions:
+              - "Overall/Read"
+
+  nodes:
+    - permanent:
+        name: "build-agent-1"
+        labelString: "linux docker"
+        numExecutors: 4
+        remoteFS: "/home/jenkins/agent"
+        mode: NORMAL
+        retentionStrategy: "always"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "deploy-user"
+              username: "deployer"
+              password: "e2e-planted-credential-password"
+              description: "Global deploy credential"
+          - string:
+              scope: GLOBAL
+              id: "npm-token"
+              secret: "e2e-planted-secret-text"
+              description: "Global npm token"
+
+unclassified:
+  audit-trail:
+    logBuildCause: true
+  # The Jenkinsfile pipeline-multibranch-defaults hands every branch of
+  # teams/defaults-mb: a script stored on the controller, not in the branch.
+  globalConfigFiles:
+    configs:
+      - groovyScript:
+          id: "e2e-default-jenkinsfile"
+          name: "Default Jenkinsfile"
+          comment: "e2e fixture"
+          content: "node { echo 'e2e-planted-managed-file-secret' }"
+
+jobs:
+  - script: |
+      folder('platform') {
+        description('Nested folder, so fullName paths get exercised.')
+      }
+      folder('hooks')
+      folder('teams')
+      folder('secrets')
+      folder('org')
+      folder('org/team-a')
+      folder('org/team-a/deep')
+      folder('Équipe A+B')
+      folder('scripts')
+
+  # The hardened shape: Jenkinsfile from SCM, polled. SCM polling is a trigger
+  # that goes through Jenkins' own scheduling, so CIS-2.3.5 passes.
+  - script: |
+      pipelineJob('platform/api-service') {
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('/var/jenkins_home/seed-repo') }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+            lightweight(true)
+          }
+        }
+        properties {
+          pipelineTriggers {
+            triggers {
+              pollSCM { scmpoll_spec('H/15 * * * *') }
+            }
+          }
+        }
+      }
+
+  - script: |
+      pipelineJob('platform/inline-deploy') {
+        definition {
+          cps {
+            script('pipeline { agent any; stages { stage("x") { steps { echo "hi" } } } }')
+            sandbox(true)
+          }
+        }
+      }
+
+  - script: |
+      pipelineJob('platform/inline-nosandbox') {
+        definition {
+          cps {
+            script('node { echo "e2e-planted-inline-script-secret" }')
+            sandbox(false)
+          }
+        }
+      }
+
+  # Multibranch over a repository with a branch named release/1.0: the child
+  # job is release%2F1.0, and a path built from it has to survive encoding.
+  - script: |
+      multibranchPipelineJob('platform/multibranch-app') {
+        branchSources {
+          git {
+            id('seed-repo')
+            remote('/var/jenkins_home/seed-repo')
+          }
+        }
+      }
+
+  - script: |
+      freeStyleJob('legacy-build') {
+        label('built-in')
+        authenticationToken('e2e-planted-auth-token')
+        steps {
+          shell('echo building')
+        }
+      }
+
+  - script: |
+      freeStyleJob('disabled-job') {
+        disabled(true)
+        steps {
+          shell('echo nothing')
+        }
+      }
+
+  # Generic Webhook Trigger: POST /generic-webhook-trigger/invoke?token=… starts
+  # this build with no Jenkins login at all. v0.1 looked only at <authToken>
+  # and reported CIS-2.3.5 PASS.
+  - script: |
+      pipelineJob('hooks/gwt-token') {
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('/var/jenkins_home/seed-repo') }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+          }
+        }
+        properties {
+          pipelineTriggers {
+            triggers {
+              genericTrigger {
+                token('e2e-planted-gwt-token')
+                printContributedVariables(false)
+                printPostContent(false)
+                regexpFilterText('')
+                regexpFilterExpression('')
+              }
+            }
+          }
+        }
+      }
+
+  # Multibranch whose branches all run one script stored on the controller,
+  # outside the sandbox (inline-pipeline). v0.1 called every multibranch
+  # project "scm": CIS-2.3.1 PASS, CIS-2.1.2 NA.
+  - script: |
+      multibranchPipelineJob('teams/inline-mb') {
+        branchSources {
+          git {
+            id('seed-inline')
+            remote('/var/jenkins_home/seed-repo')
+          }
+        }
+        factory {
+          inlineDefinitionBranchProjectFactory {
+            markerFile('Jenkinsfile')
+            script("node { echo 'e2e-planted-inline-factory-secret' }")
+            sandbox(false)
+          }
+        }
+      }
+
+  # The same, with the script in a Config File Provider file.
+  - script: |
+      multibranchPipelineJob('teams/defaults-mb') {
+        branchSources {
+          git {
+            id('seed-defaults')
+            remote('/var/jenkins_home/seed-repo')
+          }
+        }
+        factory {
+          pipelineBranchDefaultsProjectFactory {
+            scriptId('e2e-default-jenkinsfile')
+            useSandbox(true)
+          }
+        }
+      }
+
+  # Credentials embedded in SCM URLs. Both must be stripped before anything
+  # reaches the snapshot.
+  - script: |
+      pipelineJob('secrets/creds-in-url') {
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('https://deploy:e2e-planted-url-token@github.invalid/acme/app.git') }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+          }
+        }
+      }
+      multibranchPipelineJob('secrets/mb-creds-in-url') {
+        branchSources {
+          git {
+            id('creds-in-url')
+            remote('https://bot:e2e-planted-mb-url-token@gitlab.invalid/a/b.git')
+          }
+        }
+      }
+
+  # Three folders deep, on a timer: build steps are form fields (CIS-2.3.1
+  # FAIL), and a cron trigger starts nothing anyone can call (CIS-2.3.5 PASS).
+  - script: |
+      freeStyleJob('org/team-a/deep/nightly') {
+        triggers {
+          cron('H 2 * * *')
+        }
+        steps {
+          shell('echo nightly')
+        }
+      }
+
+  # A folder and a job whose names need percent-encoding: spaces, a plus sign,
+  # parentheses and characters outside ASCII.
+  - script: |
+      pipelineJob('Équipe A+B/déploiement (prod)') {
+        definition {
+          cps {
+            script('node { echo "prod" }')
+            sandbox(true)
+          }
+        }
+      }
+
+  # A Maven job: build steps are form fields, under a root element of its own
+  # (maven2-moduleset) that v0.1 did not recognise.
+  - script: |
+      mavenJob('legacy-maven') {
+        goals('clean verify')
+      }
+
+  # A freestyle "System Groovy" step with the sandbox off: Groovy on the
+  # controller with its own privileges, in a job that has no Pipeline at all.
+  - script: |
+      freeStyleJob('scripts/system-groovy') {
+        steps {
+          systemGroovyCommand('println "e2e-planted-system-groovy-secret"') {
+            sandbox(false)
+          }
+        }
+      }

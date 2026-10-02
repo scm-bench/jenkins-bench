@@ -29,7 +29,7 @@ result := {
 	security_enabled == false
 } else := {
 	"status": "MANUAL",
-	"details": "The unauthenticated probe did not reach a conclusion, so anonymous access could not be determined.",
+	"details": "The unauthenticated probe did not reach a conclusion — it was redirected, refused at the network, or answered with something other than the Jenkins API — so whether anonymous users can read the controller is unknown. The scan warnings say what it got back.",
 } if {
 	not lib.known(["security", "anonymousRead"])
 } else := {

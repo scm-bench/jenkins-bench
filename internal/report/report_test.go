@@ -3,6 +3,8 @@ package report
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,7 @@ func sample() *engine.Report {
 		},
 	}
 	rep.Score = engine.Compute(rep.Findings)
+	rep.Coverage = engine.Coverage{Jobs: 3, JobControls: 5, Complete: true}
 	return rep
 }
 
@@ -502,5 +505,479 @@ func TestEveryLineFitsTheTerminalWidth(t *testing.T) {
 		if longest <= width/2 {
 			t.Errorf("line overflows %d columns without an unbreakable token: %q", width, l)
 		}
+	}
+}
+
+// A run that judged no job must not look like one whose jobs were all fine, in
+// any format: the table says so beside the score, and SARIF marks the run as
+// not having executed successfully, which code scanning surfaces instead of
+// closing every job alert as fixed.
+func TestNoJobsAuditedIsVisibleInEveryFormat(t *testing.T) {
+	rep := sample()
+	rep.Coverage = engine.Coverage{Jobs: 0, JobControls: 5, Complete: true}
+
+	var table bytes.Buffer
+	if err := Write(&table, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(table.String(), "no job was evaluated") {
+		t.Errorf("the table should say no job was evaluated:\n%s", table.String())
+	}
+
+	var sarif bytes.Buffer
+	if err := Write(&sarif, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	var log struct {
+		Runs []struct {
+			Invocations []struct {
+				ExecutionSuccessful bool `json:"executionSuccessful"`
+			} `json:"invocations"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(sarif.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	if log.Runs[0].Invocations[0].ExecutionSuccessful {
+		t.Error("a run that judged no job did not execute successfully")
+	}
+
+	var js bytes.Buffer
+	if err := Write(&js, rep, Options{Format: FormatJSON}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(js.String(), `"jobControls": 5`) {
+		t.Errorf("the JSON report should carry the coverage:\n%s", js.String())
+	}
+}
+
+// A folder that could not be listed is as invisible in a report as a job with
+// nothing wrong — unless the report says so, in every format.
+func TestIncompleteListingIsVisibleInEveryFormat(t *testing.T) {
+	rep := sample()
+	rep.Coverage = engine.Coverage{Jobs: 3, JobControls: 5, Complete: false, Unlisted: []string{"prod"}}
+
+	var table bytes.Buffer
+	if err := Write(&table, rep, Options{Format: FormatTable, Width: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(table.String(), "the job list is incomplete: 1 container could not be listed") {
+		t.Errorf("the table should say the job list is incomplete:\n%s", table.String())
+	}
+
+	var sarif bytes.Buffer
+	if err := Write(&sarif, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sarif.String(), `"executionSuccessful": false`) {
+		t.Errorf("an incomplete scan did not execute successfully:\n%s", sarif.String())
+	}
+	if !strings.Contains(sarif.String(), "could not be listed") {
+		t.Error("SARIF should carry a notification saying why")
+	}
+
+	complete := sample()
+	sarif.Reset()
+	if err := Write(&sarif, complete, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sarif.String(), `"executionSuccessful": true`) {
+		t.Error("a complete scan with no policy errors executed successfully")
+	}
+}
+
+// sarifDoc is the part of a SARIF log the code-scanning tests read.
+type sarifDoc struct {
+	Runs []struct {
+		AutomationDetails struct {
+			ID string `json:"id"`
+		} `json:"automationDetails"`
+		Tool struct {
+			Driver struct {
+				Rules []struct {
+					ID                   string `json:"id"`
+					DefaultConfiguration struct {
+						Level string `json:"level"`
+					} `json:"defaultConfiguration"`
+					Properties map[string]any `json:"properties"`
+				} `json:"rules"`
+			} `json:"driver"`
+		} `json:"tool"`
+		Results []struct {
+			RuleID    string                `json:"ruleId"`
+			Level     string                `json:"level"`
+			Message   struct{ Text string } `json:"message"`
+			Locations []struct {
+				PhysicalLocation struct {
+					ArtifactLocation struct {
+						URI string `json:"uri"`
+					} `json:"artifactLocation"`
+					Region map[string]int `json:"region"`
+				} `json:"physicalLocation"`
+				LogicalLocations []struct {
+					Name string `json:"name"`
+					Kind string `json:"kind"`
+				} `json:"logicalLocations"`
+			} `json:"locations"`
+			PartialFingerprints map[string]string `json:"partialFingerprints"`
+		} `json:"results"`
+		Invocations []struct {
+			ExecutionSuccessful        bool `json:"executionSuccessful"`
+			ToolExecutionNotifications []struct {
+				Message struct{ Text string } `json:"message"`
+			} `json:"toolExecutionNotifications"`
+		} `json:"invocations"`
+	} `json:"runs"`
+}
+
+func sarifOf(t *testing.T, rep *engine.Report) sarifDoc {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	var doc sarifDoc
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// GitHub code scanning drops a result without a physicalLocation: the upload
+// succeeds and the Security tab stays empty (scm-bench/jenkins-bench#10).
+// Every result carries one now, a relative path naming the platform, the
+// controller and the resource, with the region GitHub requires.
+func TestSARIFResultsCarryAPhysicalLocation(t *testing.T) {
+	rep := sample()
+	rep.Findings = append(rep.Findings,
+		finding("CIS-2.3.5", "Équipe A+B/déploiement (prod)", engine.ResourceJob, engine.StatusFail, "MEDIUM"),
+		finding("CIS-2.3.5", "platform/mb/release%2F1.0", engine.ResourceJob, engine.StatusFail, "MEDIUM"))
+	doc := sarifOf(t, rep)
+	run := doc.Runs[0]
+	if run.AutomationDetails.ID != "jenkins-bench/jenkins.invalid/" {
+		t.Errorf("automationDetails.id = %q; two controllers uploading to one repository must not share it", run.AutomationDetails.ID)
+	}
+	uris := map[string]bool{}
+	for _, r := range run.Results {
+		if len(r.Locations) != 1 {
+			t.Fatalf("%s: %d locations", r.RuleID, len(r.Locations))
+		}
+		loc := r.Locations[0]
+		uri := loc.PhysicalLocation.ArtifactLocation.URI
+		uris[uri] = true
+		if !strings.HasPrefix(uri, "jenkins/jenkins.invalid/") {
+			t.Errorf("%s: uri %q should start with the platform and controller", r.RuleID, uri)
+		}
+		if loc.PhysicalLocation.Region["startLine"] != 1 || loc.PhysicalLocation.Region["endColumn"] != 1 {
+			t.Errorf("%s: region = %v", r.RuleID, loc.PhysicalLocation.Region)
+		}
+		if len(loc.LogicalLocations) != 1 || loc.LogicalLocations[0].Name == "" {
+			t.Errorf("%s: logical location missing", r.RuleID)
+		}
+		hash := r.PartialFingerprints["primaryLocationLineHash"]
+		if !strings.HasSuffix(hash, ":1") || len(hash) != 34 {
+			t.Errorf("%s: primaryLocationLineHash = %q", r.RuleID, hash)
+		}
+		if r.PartialFingerprints["scmBenchFindingV1"] == "" {
+			t.Errorf("%s: the family fingerprint is gone", r.RuleID)
+		}
+	}
+	for _, want := range []string{
+		"jenkins/jenkins.invalid/controller",
+		"jenkins/jenkins.invalid/legacy-build",
+		"jenkins/jenkins.invalid/%C3%89quipe%20A+B/d%C3%A9ploiement%20%28prod%29",
+		"jenkins/jenkins.invalid/platform/mb/release%252F1.0",
+	} {
+		if !uris[want] {
+			t.Errorf("no result located at %s; got %v", want, uris)
+		}
+	}
+}
+
+// GitHub shows an alert at its rule's security-severity. A MANUAL result
+// shared its control's rule, so "a person needs to check this" displayed as
+// High once any job failed the same control.
+func TestSARIFKeepsManualResultsOffTheSeverityScale(t *testing.T) {
+	doc := sarifOf(t, sample())
+	rules := map[string]map[string]any{}
+	levels := map[string]string{}
+	for _, r := range doc.Runs[0].Tool.Driver.Rules {
+		rules[r.ID] = r.Properties
+		levels[r.ID] = r.DefaultConfiguration.Level
+	}
+	if rules["CIS-2.1.6"]["security-severity"] != "8.0" || levels["CIS-2.1.6"] != "error" {
+		t.Errorf("a HIGH failure's rule = %v / %s", rules["CIS-2.1.6"], levels["CIS-2.1.6"])
+	}
+	manual, ok := rules["CIS-2.3.5/manual"]
+	if !ok {
+		t.Fatalf("MANUAL results need a rule of their own: %v", rules)
+	}
+	if _, has := manual["security-severity"]; has || levels["CIS-2.3.5/manual"] != "note" {
+		t.Errorf("a manual rule must carry no security-severity and be a note: %v / %s", manual, levels["CIS-2.3.5/manual"])
+	}
+	for _, r := range doc.Runs[0].Results {
+		if strings.HasSuffix(r.RuleID, "/manual") && r.Level != "note" {
+			t.Errorf("%s: a manual result is a note, got %s", r.RuleID, r.Level)
+		}
+		if r.RuleID == "CIS-2.3.1" && strings.Contains(r.Message.Text, "platform/api-service") {
+			t.Error("a PASS was emitted")
+		}
+	}
+	if securitySeverity("LOW") != "2.0" {
+		t.Errorf("LOW maps to %s, want 2.0 like the other benches", securitySeverity("LOW"))
+	}
+}
+
+// A control no API can answer is one question for a person: one result for
+// the control, at the controller, not one per job.
+func TestSARIFReportsAManualByDesignControlOnce(t *testing.T) {
+	rep := &engine.Report{Metadata: sample().Metadata, Coverage: engine.Coverage{Complete: true}}
+	for _, job := range []string{"a", "b", "c"} {
+		f := finding("CIS-2.1.1", job, engine.ResourceJob, engine.StatusManual, "MEDIUM")
+		f.Automated = false
+		rep.Findings = append(rep.Findings, f)
+	}
+	rep.Score = engine.Compute(rep.Findings)
+	results := sarifOf(t, rep).Runs[0].Results
+	if len(results) != 1 {
+		t.Fatalf("%d results, want one for the control", len(results))
+	}
+	r := results[0]
+	if r.RuleID != "CIS-2.1.1/manual" || r.Locations[0].PhysicalLocation.ArtifactLocation.URI != "jenkins/jenkins.invalid/controller" {
+		t.Errorf("result = %+v", r)
+	}
+	if !strings.Contains(r.Message.Text, "3 jobs") {
+		t.Errorf("the message should say how many jobs it covers: %s", r.Message.Text)
+	}
+}
+
+// GitHub keeps the 5,000 most severe results of a run and rejects one past
+// 25,000; a 10,000-job controller produces some 30,000. The run keeps the most
+// severe itself, and says how many it withheld.
+func TestSARIFCapsResultsMostSevereFirst(t *testing.T) {
+	rep := &engine.Report{Metadata: sample().Metadata, Coverage: engine.Coverage{Complete: true}}
+	for i := 0; i < maxSARIFResults+10; i++ {
+		rep.Findings = append(rep.Findings, finding("CIS-2.3.5", fmt.Sprintf("job-%05d", i), engine.ResourceJob, engine.StatusManual, "MEDIUM"))
+	}
+	rep.Findings = append(rep.Findings, finding("CIS-2.3.1", "legacy", engine.ResourceJob, engine.StatusFail, "HIGH"))
+	rep.Score = engine.Compute(rep.Findings)
+	doc := sarifOf(t, rep)
+	results := doc.Runs[0].Results
+	if len(results) != maxSARIFResults {
+		t.Fatalf("%d results, want the cap of %d", len(results), maxSARIFResults)
+	}
+	if results[0].RuleID != "CIS-2.3.1" {
+		t.Errorf("the failure should survive the cap first, got %s", results[0].RuleID)
+	}
+	found := false
+	for _, n := range doc.Runs[0].Invocations[0].ToolExecutionNotifications {
+		if strings.Contains(n.Message.Text, "11 less severe results were withheld") && strings.Contains(n.Message.Text, "-o json") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the run should say how many results it withheld, and where to find them")
+	}
+}
+
+// An accepted finding carries SARIF's own suppression, which code scanning
+// shows as dismissed with the justification, rather than as an open alert.
+func TestSARIFCarriesAcceptedFindingsAsSuppressed(t *testing.T) {
+	rep := sample()
+	for i := range rep.Findings {
+		if rep.Findings[i].CheckID == "CIS-2.3.1" && rep.Findings[i].Status == engine.StatusFail {
+			rep.Findings[i].Waiver = &engine.Waiver{Reason: "vendor job", Owner: "platform", Expires: "2027-03-31"}
+		}
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatSARIF}); err != nil {
+		t.Fatal(err)
+	}
+	var log struct {
+		Runs []struct {
+			Results []struct {
+				RuleID       string `json:"ruleId"`
+				Suppressions []struct {
+					Kind          string `json:"kind"`
+					Status        string `json:"status"`
+					Justification string `json:"justification"`
+				} `json:"suppressions"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, r := range log.Runs[0].Results {
+		if r.RuleID != "CIS-2.3.1" {
+			if len(r.Suppressions) != 0 {
+				t.Errorf("%s was not accepted but carries a suppression", r.RuleID)
+			}
+			continue
+		}
+		seen = true
+		s := r.Suppressions
+		if len(s) != 1 || s[0].Kind != "external" || s[0].Status != "accepted" || !strings.Contains(s[0].Justification, "vendor job") {
+			t.Errorf("suppressions = %+v", s)
+		}
+	}
+	if !seen {
+		t.Fatal("no CIS-2.3.1 result")
+	}
+}
+
+// The table lists an accepted finding under its own heading, never among the
+// failures, and says beside the score why a FAIL count did not fail the run.
+func TestTableSetsAcceptedFindingsApart(t *testing.T) {
+	rep := sample()
+	for i := range rep.Findings {
+		if rep.Findings[i].CheckID == "CIS-2.3.1" && rep.Findings[i].Status == engine.StatusFail {
+			rep.Findings[i].Waiver = &engine.Waiver{Reason: "vendor job", Expires: "2027-03-31"}
+		}
+	}
+	rep.ExceptionWarnings = []string{"the exception for CIS-2.1.6 on controller lapsed on 2026-01-01"}
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 120}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"Accepted by exceptions (1)",
+		"legacy-build  CIS-2.3.1 FAIL: accepted until 2027-03-31: vendor job",
+		"1 failed finding accepted by exceptions",
+		"Exceptions",
+		"lapsed on 2026-01-01",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("table is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "legacy-build  CIS-2.3.1 HIGH") {
+		t.Errorf("an accepted finding was listed among the failures:\n%s", out)
+	}
+
+	var details bytes.Buffer
+	if err := Write(&details, rep, Options{Format: FormatTable, Width: 160, Details: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(details.String(), "accepted until 2027-03-31") {
+		t.Errorf("the details view should carry the note in the finding cell:\n%s", details.String())
+	}
+}
+
+type junitDoc struct {
+	Tests      int `xml:"tests,attr"`
+	Failures   int `xml:"failures,attr"`
+	Skipped    int `xml:"skipped,attr"`
+	Properties struct {
+		Property []struct {
+			Name  string `xml:"name,attr"`
+			Value string `xml:"value,attr"`
+		} `xml:"property"`
+	} `xml:"properties"`
+	Suites []struct {
+		Name  string `xml:"name,attr"`
+		Cases []struct {
+			Name      string `xml:"name,attr"`
+			ClassName string `xml:"classname,attr"`
+			Failure   *struct {
+				Type string `xml:"type,attr"`
+				Text string `xml:",chardata"`
+			} `xml:"failure"`
+			Skipped *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"skipped"`
+		} `xml:"testcase"`
+	} `xml:"testsuite"`
+}
+
+func junitOf(t *testing.T, rep *engine.Report) (junitDoc, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatJUnit, ToolVersion: "1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	var doc junitDoc
+	if err := xml.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatalf("JUnit output does not parse: %v\n%s", err, buf.String())
+	}
+	return doc, buf.String()
+}
+
+// JUnit is for the CI systems that draw test results natively. Every finding
+// is a test case, so the totals add up and nothing is silently dropped; only
+// an unaccepted FAIL is a failure.
+func TestJUnitCountsEveryFindingAndFailsOnlyRealFailures(t *testing.T) {
+	rep := sample()
+	accepted := finding("CIS-2.3.1", "vendor/job", engine.ResourceJob, engine.StatusFail, "HIGH")
+	accepted.Waiver = &engine.Waiver{Reason: "migration", Expires: "2027-01-01"}
+	rep.Findings = append(rep.Findings, accepted)
+	doc, raw := junitOf(t, rep)
+
+	// sample(): FAIL controller, PASS api-service, FAIL legacy-build, MANUAL
+	// legacy-build, NA disabled-job — plus the accepted failure.
+	if doc.Tests != 6 || doc.Failures != 2 || doc.Skipped != 3 {
+		t.Errorf("totals tests=%d failures=%d skipped=%d, want 6/2/3\n%s", doc.Tests, doc.Failures, doc.Skipped, raw)
+	}
+	cases := map[string]string{}
+	for _, s := range doc.Suites {
+		if !strings.Contains(s.Name, ": ") {
+			t.Errorf("suite name %q should be \"ID: title\"", s.Name)
+		}
+		for _, c := range s.Cases {
+			key := c.ClassName + " " + c.Name
+			switch {
+			case c.Failure != nil:
+				cases[key] = "failure:" + c.Failure.Type
+				if !strings.Contains(c.Failure.Text, "Fix: ") {
+					t.Errorf("failure text %q carries no fix", c.Failure.Text)
+				}
+			case c.Skipped != nil:
+				cases[key] = "skipped:" + c.Skipped.Message
+			default:
+				cases[key] = "pass"
+			}
+		}
+	}
+	for key, want := range map[string]string{
+		"CIS-2.1.6 controller":           "failure:HIGH",
+		"CIS-2.3.1 legacy-build":         "failure:HIGH",
+		"CIS-2.3.1 platform/api-service": "pass",
+		"CIS-2.3.5 legacy-build":         "skipped:MANUAL: one sentence about this resource",
+		"CIS-2.2.3 disabled-job":         "skipped:not applicable: one sentence about this resource",
+		"CIS-2.3.1 vendor/job":           "skipped:FAIL, accepted until 2027-01-01: migration",
+	} {
+		if cases[key] != want {
+			t.Errorf("%s = %q, want %q", key, cases[key], want)
+		}
+	}
+	props := map[string]string{}
+	for _, p := range doc.Properties.Property {
+		props[p.Name] = p.Value
+	}
+	if props["toolVersion"] != "1.2.3" || props["platform"] != "jenkins" || props["baseUrl"] == "" || props["score"] == "" {
+		t.Errorf("properties = %v", props)
+	}
+}
+
+// Jobs a scan never saw have no test case to fail, so a scan that could not
+// list a folder, judged no job, or lost a policy carries failing cases of its
+// own rather than rendering as a clean run.
+func TestJUnitFailsAScanThatCouldNotDoItsJob(t *testing.T) {
+	rep := sample()
+	rep.Coverage = engine.Coverage{Jobs: 0, JobControls: 5, Complete: false, Unlisted: []string{"locked"}}
+	rep.Errors = []string{"CIS-2.3.1 on x: policy evaluation failed"}
+	_, raw := junitOf(t, rep)
+	for _, want := range []string{`name="scan"`, `name="locked" classname="scan.coverage"`, `name="jobs" classname="scan.coverage"`, `classname="scan.policy"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("JUnit is missing %s:\n%s", want, raw)
+		}
+	}
+
+	unrecorded := sample()
+	unrecorded.Coverage = engine.Coverage{Jobs: 3, JobControls: 5}
+	if _, raw := junitOf(t, unrecorded); !strings.Contains(raw, `name="job list" classname="scan.coverage"`) {
+		t.Errorf("a snapshot with no completeness record should fail in JUnit:\n%s", raw)
 	}
 }

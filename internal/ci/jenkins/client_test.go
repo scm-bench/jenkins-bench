@@ -2,9 +2,14 @@ package jenkins
 
 import (
 	"context"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -176,7 +181,7 @@ func TestClientHonoursContextCancellation(t *testing.T) {
 // report PASS on a controller nobody checked.
 func TestProbeAnonymousDistinguishesDenialFromFailure(t *testing.T) {
 	allowed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{}`))
+		w.Write([]byte(`{"_class":"hudson.model.Hudson","useSecurity":true}`))
 	}))
 	defer allowed.Close()
 	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -185,13 +190,13 @@ func TestProbeAnonymousDistinguishesDenialFromFailure(t *testing.T) {
 	defer denied.Close()
 
 	c, _ := NewClient(Options{BaseURL: allowed.URL})
-	if ok, conclusive := c.ProbeAnonymous(context.Background(), "/api/json"); !ok || !conclusive {
-		t.Errorf("a 200 means anonymous read: ok=%v conclusive=%v", ok, conclusive)
+	if p := c.ProbeAnonymous(context.Background(), "/api/json"); !p.Allowed || !p.Conclusive {
+		t.Errorf("the Jenkins API served anonymously is anonymous read: %+v", p)
 	}
 
 	c, _ = NewClient(Options{BaseURL: denied.URL})
-	if ok, conclusive := c.ProbeAnonymous(context.Background(), "/api/json"); ok || !conclusive {
-		t.Errorf("a 403 is a conclusion: ok=%v conclusive=%v", ok, conclusive)
+	if p := c.ProbeAnonymous(context.Background(), "/api/json"); p.Allowed || !p.Conclusive {
+		t.Errorf("a 403 is a conclusion: %+v", p)
 	}
 
 	// Nothing listening: not a denial.
@@ -199,8 +204,49 @@ func TestProbeAnonymousDistinguishesDenialFromFailure(t *testing.T) {
 	url := unreachable.URL
 	unreachable.Close()
 	c, _ = NewClient(Options{BaseURL: url, Timeout: 200 * time.Millisecond})
-	if ok, conclusive := c.ProbeAnonymous(context.Background(), "/api/json"); ok || conclusive {
-		t.Errorf("an unreachable controller is not a denial: ok=%v conclusive=%v", ok, conclusive)
+	if p := c.ProbeAnonymous(context.Background(), "/api/json"); p.Allowed || p.Conclusive || p.Reason == "" {
+		t.Errorf("an unreachable controller is not a denial, and says why: %+v", p)
+	}
+}
+
+// Behind an authenticating proxy an unauthenticated request is redirected to a
+// sign-in page that answers 200. The probe used to follow it and take the 200
+// for the Jenkins API. It follows nothing now, and neither a redirect nor a
+// page that is not the API settles anything.
+func TestProbeAnonymousTakesOnlyTheAPIForAccess(t *testing.T) {
+	var signInHits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sso/login", func(w http.ResponseWriter, r *http.Request) {
+		signInHits.Add(1)
+		w.Write([]byte("<html>Sign in with SSO</html>"))
+	})
+	mux.HandleFunc("/api/json", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/sso/login?rd=%2Fapi%2Fjson", http.StatusFound)
+	})
+	mux.HandleFunc("/page", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html>Welcome</html>"))
+	})
+	mux.HandleFunc("/other-json", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"_class":"some.proxy.Status"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	p := c.ProbeAnonymous(context.Background(), "/api/json")
+	if p.Allowed || p.Conclusive {
+		t.Errorf("a redirect settles nothing: %+v", p)
+	}
+	if signInHits.Load() != 0 {
+		t.Error("the probe followed the redirect")
+	}
+	if !strings.Contains(p.Reason, "/sso/login") || strings.Contains(p.Reason, "rd=") {
+		t.Errorf("the reason should name where it was sent, without the query: %q", p.Reason)
+	}
+	for _, path := range []string{"/page", "/other-json"} {
+		if p := c.ProbeAnonymous(context.Background(), path); p.Allowed || p.Conclusive {
+			t.Errorf("%s is not the Jenkins API: %+v", path, p)
+		}
 	}
 }
 
@@ -217,7 +263,7 @@ func TestProbeAnonymousSendsNoCredentials(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
-	c.ProbeAnonymous(context.Background(), "/api/json")
+	_ = c.ProbeAnonymous(context.Background(), "/api/json")
 	if sawAuth.Load() {
 		t.Error("the anonymous probe sent an Authorization header")
 	}
@@ -359,5 +405,296 @@ func TestEncodedPathsSurviveURLConstruction(t *testing.T) {
 	}
 	if seen != "/job/Team%20A/job/Case%2001/api/json" {
 		t.Errorf("path = %s", seen)
+	}
+}
+
+// An https controller redirecting to http on the same host — the shape of a
+// TLS-terminating proxy that rewrites Location headers — made Go's client
+// follow it and re-send the Authorization header in cleartext: net/http keeps
+// credentials across a redirect to the same host whatever the scheme. The
+// first request a scan makes is authenticated, so the token went out on the
+// first hop, past the cleartext refusal that guards --url.
+func TestClientRefusesAnHTTPSToHTTPRedirect(t *testing.T) {
+	var sawAuthOnPlain atomic.Bool
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawAuthOnPlain.Store(true)
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer secure.Close()
+
+	c, err := NewClient(Options{BaseURL: secure.URL, Username: "u", Token: "s3cret", Insecure: true, MaxRetries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.GetJSON(context.Background(), "/api/json", nil)
+	if sawAuthOnPlain.Load() {
+		t.Fatal("the token was sent over plain http after a redirect")
+	}
+	if err == nil {
+		t.Fatal("a downgrade redirect must be an error, not a followed hop")
+	}
+	for _, want := range []string{"https://", "http://", "cleartext"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should name both URLs and why: %v", err)
+		}
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("the error carries the token: %v", err)
+	}
+}
+
+// A redirect to another host or port is never followed: the credential was
+// handed to the scan for one controller.
+func TestClientRefusesACrossOriginRedirect(t *testing.T) {
+	var reached atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		w.Write([]byte(`{}`))
+	}))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/sso/login", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	c, _ := NewClient(Options{BaseURL: origin.URL, Username: "u", Token: "t", MaxRetries: 2})
+	err := c.GetJSON(context.Background(), "/api/json", nil)
+	if err == nil {
+		t.Fatal("a cross-origin redirect must be an error")
+	}
+	if reached.Load() {
+		t.Error("the redirect was followed to another origin")
+	}
+	if !strings.Contains(err.Error(), "different origin") {
+		t.Errorf("the error should say why: %v", err)
+	}
+}
+
+// Within the origin a redirect is harmless and followed — with the
+// credential, a bounded number of times.
+func TestClientFollowsASameOriginRedirect(t *testing.T) {
+	var hops atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/old/api/json":
+			http.Redirect(w, r, "/api/json", http.StatusMovedPermanently)
+		case "/loop":
+			hops.Add(1)
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		default:
+			if r.Header.Get("Authorization") == "" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := c.GetJSON(context.Background(), "/old/api/json", &out); err != nil || !out.OK {
+		t.Fatalf("a same-origin redirect should be followed with the credential: %v %+v", err, out)
+	}
+	if err := c.GetJSON(context.Background(), "/loop", nil); err == nil {
+		t.Error("a redirect loop must end in an error")
+	}
+	if n := hops.Load(); n > 6 {
+		t.Errorf("followed %d redirects; the limit is 5", n)
+	}
+}
+
+func TestSameOrigin(t *testing.T) {
+	parse := func(s string) *url.URL {
+		u, err := url.Parse(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"https://j.example.com/x", "https://j.example.com:443/y", true},
+		{"http://j.example.com/x", "http://J.EXAMPLE.COM:80/y", true},
+		{"https://j.example.com/x", "http://j.example.com/x", false},
+		{"https://j.example.com/x", "https://j.example.com:8443/x", false},
+		{"https://j.example.com/x", "https://sso.example.com/x", false},
+	}
+	for _, tc := range cases {
+		if got := sameOrigin(parse(tc.a), parse(tc.b)); got != tc.want {
+			t.Errorf("sameOrigin(%s, %s) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// A body past the cap used to be cut off silently and decoded as if whole.
+// It is an error now, and not retried: the next attempt would be as large.
+func TestClientRefusesABodyPastTheCap(t *testing.T) {
+	old := maxBody
+	maxBody = 16
+	t.Cleanup(func() { maxBody = old })
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Write([]byte(`{"jobs":[{"name":"a"},{"name":"b"}]}`))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(Options{BaseURL: srv.URL, MaxRetries: 2})
+	err := c.GetJSON(context.Background(), "/api/json", nil)
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("an oversized body must be an error saying so: %v", err)
+	}
+	if attempts.Load() != 1 {
+		t.Errorf("an oversized body was retried %d times", attempts.Load()-1)
+	}
+
+	maxBody = 1 << 10
+	if err := c.GetJSON(context.Background(), "/api/json", nil); err != nil {
+		t.Errorf("a body under the cap is read: %v", err)
+	}
+}
+
+// Eight requests in flight need eight connections kept open, or each one is a
+// fresh TCP and TLS handshake against the controller.
+func TestClientKeepsAConnectionPerConcurrentRequest(t *testing.T) {
+	c, err := NewClient(Options{BaseURL: "https://jenkins.example.com", Concurrency: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.httpClient.Transport.(*observedTransport).base.(*http.Transport).MaxIdleConnsPerHost; got != 8 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 8", got)
+	}
+}
+
+// The scan's closing account counts at the wire: every attempt, and every
+// redirect hop the client follows, is a request that was sent.
+func TestClientReportsEveryRequestSent(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/moved":
+			http.Redirect(w, r, "/api/json", http.StatusFound)
+		case calls.Add(1) == 1:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var events []RequestEvent
+	c, _ := NewClient(Options{BaseURL: srv.URL, MaxRetries: 2, OnRequest: func(e RequestEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}})
+	if err := c.GetJSON(context.Background(), "/moved", nil); err != nil {
+		t.Fatal(err)
+	}
+	// /moved -> 302, /api/json -> 503, then the retry: /moved -> 302, /api/json -> 200.
+	if len(events) != 4 {
+		t.Fatalf("events = %+v, want each hop of each attempt", events)
+	}
+	if events[0].Status != http.StatusFound || events[1].Status != http.StatusServiceUnavailable || events[3].Status != http.StatusOK {
+		t.Errorf("statuses = %d %d %d %d", events[0].Status, events[1].Status, events[2].Status, events[3].Status)
+	}
+	if events[2].Attempt != 1 || events[3].Attempt != 1 {
+		t.Errorf("the retry's hops should carry its attempt number: %+v", events)
+	}
+}
+
+// Nothing but a read leaves the process, whatever a future caller asks of
+// the underlying client — and the attempt is still reported, so the account
+// can say so.
+func TestTransportRefusesAnythingButARead(t *testing.T) {
+	var reached atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+	}))
+	defer srv.Close()
+
+	var events []RequestEvent
+	c, _ := NewClient(Options{BaseURL: srv.URL, OnRequest: func(e RequestEvent) { events = append(events, e) }})
+	resp, err := c.httpClient.Post(srv.URL+"/job/x/build", "text/plain", strings.NewReader(""))
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("a POST went out")
+	}
+	if reached.Load() {
+		t.Error("the server received the POST")
+	}
+	if len(events) != 1 || events[0].Method != http.MethodPost || events[0].Err == nil {
+		t.Errorf("the refused POST should still be reported: %+v", events)
+	}
+}
+
+// writeCA writes the TLS stand-in's certificate as a PEM bundle.
+func writeCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(path, block, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A controller behind an internal CA had one option, scan.insecure, which
+// stops checking who answered at all. scan.caFile trusts a bundle on top of the
+// system pool, and the certificate is still verified.
+func TestClientTrustsAnInternalCA(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Options{BaseURL: srv.URL, CAFile: writeCA(t, srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.GetJSON(context.Background(), "/api/json", nil); err != nil {
+		t.Fatalf("a certificate from the bundle's CA should verify: %v", err)
+	}
+
+	// Without the bundle the certificate is refused — once, not after a
+	// round of retries, and with directions.
+	attempts.Store(0)
+	c, _ = NewClient(Options{BaseURL: srv.URL, MaxRetries: 3})
+	err = c.GetJSON(context.Background(), "/api/json", nil)
+	if err == nil || !strings.Contains(err.Error(), "scan.caFile") {
+		t.Fatalf("an unknown authority should be an error naming scan.caFile: %v", err)
+	}
+	if n := attempts.Load(); n > 0 {
+		t.Errorf("the handshake failed, so no request reached the server; got %d", n)
+	}
+}
+
+func TestCAFileIsValidatedAtStartup(t *testing.T) {
+	if _, err := NewClient(Options{BaseURL: "https://jenkins.example.com", CAFile: filepath.Join(t.TempDir(), "missing.pem")}); err == nil ||
+		!strings.Contains(err.Error(), "scan.caFile") {
+		t.Errorf("a missing bundle should be a configuration error: %v", err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.pem")
+	if err := os.WriteFile(empty, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient(Options{BaseURL: "https://jenkins.example.com", CAFile: empty}); err == nil ||
+		!strings.Contains(err.Error(), "no PEM certificate") {
+		t.Errorf("a bundle with no certificate should be refused: %v", err)
 	}
 }

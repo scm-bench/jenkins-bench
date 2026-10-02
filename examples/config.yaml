@@ -36,11 +36,29 @@ scan:
   timeout: 30s
   maxDuration: 0s
 
+  # How much the scan says on stderr while it runs: full prints every request
+  # (as -v does, which overrides this), compact one self-overwriting line on a
+  # terminal, off nothing. The closing account of what was sent — "✓ N requests
+  # · N GET · 0 writes · read-only" — is printed whatever this says.
+  progress: compact
+
+  # A controller whose certificate comes from an internal CA: name a PEM bundle
+  # holding that CA, trusted in addition to the system's. This is the setting
+  # an enterprise controller needs — not insecure, which stops checking who
+  # answered at all. A proxy is taken from HTTPS_PROXY and NO_PROXY.
+  #caFile: /etc/ssl/certs/corp-root-ca.pem
+
   # Weakening transport security is a decision written into a file someone can
   # review, not a habit of the fingers. allowPlaintext is not needed for
   # localhost, which is already permitted.
   insecure: false
   allowPlaintext: false
+
+  # Accept a scan in which some folder could not be listed. Its jobs are absent
+  # from the report rather than judged, so by default such a scan exits 2 — the
+  # report is still written, and the warnings name every folder that was
+  # missed. Set this only for a folder the scanning account is meant not to see.
+  allowIncomplete: false
 
 # The numeric knobs the policies read, handed to Rego verbatim as input.config
 # so that no control hard-codes a number.
@@ -74,6 +92,31 @@ auditPluginNames:
 # and a report that silently omits them describes a smaller controller than the
 # one that exists.
 skipDisabledJobs: false
+
+# Exceptions: findings your organisation has decided to live with, for a
+# stated reason and until a stated date. Every field but owner is required —
+# an exception without a reason or an end date is how accepted risk becomes
+# forgotten risk.
+#
+# An accepted finding is still reported (under "Accepted by exceptions"),
+# still FAIL, and still counted in the score: the score describes the
+# controller, and accepting a finding does not change the controller. What it
+# stops doing is failing the run on scan.failOn — or, for a MANUAL finding,
+# counting against scan.maxManual. In SARIF it carries a suppression, which
+# code scanning shows as dismissed.
+#
+# The day after expires, it lapses and the finding fails the run again; an
+# exception that matches nothing is reported too, so the list cannot rot
+# quietly. resources are globs over job full names: * does not cross a "/",
+# so platform/* is every job directly in the platform folder, and
+# "controller" is a controller-scope control.
+#
+# exceptions:
+#   - control: CIS-2.3.5
+#     resources: [platform/legacy-*]
+#     reason: Vendor job, replaced in Q1
+#     owner: platform-team@example.com
+#     expires: 2027-03-31
 
 # Controls to leave out, or the only ones to run. A name that matches no control
 # is an error rather than a no-op: an exclude that matches nothing leaves the

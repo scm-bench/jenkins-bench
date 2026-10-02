@@ -61,7 +61,8 @@ joined(items, limit) := msg if {
 # plugin_installed reports whether a plugin is present and active. An absent
 # plugin is missing knowledge, not a passing grade: a control that depends on
 # one must check `available("plugins")` first and report MANUAL when the plugin
-# list could not be read at all, which needs Overall/Administer.
+# list could not be read at all, which needs Overall/SystemRead (implied by
+# Overall/Administer).
 plugin_installed(short_name) if {
 	some p in list("plugins")
 	p.shortName == short_name
@@ -76,7 +77,7 @@ plugin_installed(short_name) if {
 #
 # It goes first in a control's chain, ahead of the availability checks: whether
 # a job is disabled comes from the job API that Job/Read already reads.
-# scan.skipDisabledJobs drops these jobs from the report instead.
+# skipDisabledJobs drops these jobs from the report instead.
 job_disabled if {
 	object.get(resource, "disabled", false) == true
 }

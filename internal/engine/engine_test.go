@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/open-policy-agent/opa/v1/ast"
 
 	"github.com/scm-bench/jenkins-bench/internal/checks"
 	"github.com/scm-bench/jenkins-bench/internal/ci"
@@ -23,7 +26,7 @@ func hardenedSnapshot() *ci.Snapshot {
 			},
 			BuiltInNode: ci.BuiltInNode{NumExecutors: 0, NumExecutorsKnown: true},
 			Available: map[string]bool{
-				"root": true, "agents": true, "plugins": true, "updateSite": true, "credentials": true,
+				"root": true, "agents": true, "plugins": true, "updateSite": true, "credentials": true, "jobs": true,
 			},
 		},
 		Jobs: []ci.Job{
@@ -311,6 +314,157 @@ func TestEvaluateIsCancellable(t *testing.T) {
 	for _, c := range bundle.Checks {
 		if !seen[c.ID] {
 			t.Errorf("%s is silently missing from a cancelled report", c.ID)
+		}
+	}
+}
+
+// Coverage is what lets the CLI tell "every job is fine" from "there were no
+// jobs to judge": the score reads the same for both.
+func TestCoverageCountsWhatTheJobControlsSaw(t *testing.T) {
+	rep := evaluate(t, config.Default(), hardenedSnapshot())
+	if rep.Coverage.Jobs != 2 {
+		t.Errorf("coverage.jobs = %d, want 2", rep.Coverage.Jobs)
+	}
+	if rep.Coverage.JobControls == 0 {
+		t.Error("the bundle ships job-scope controls; coverage should count them")
+	}
+	if rep.Coverage.NoJobsAudited() {
+		t.Error("two jobs were audited")
+	}
+
+	empty := hardenedSnapshot()
+	empty.Jobs = nil
+	if rep := evaluate(t, config.Default(), empty); !rep.Coverage.NoJobsAudited() {
+		t.Errorf("a snapshot without jobs audited none: %+v", rep.Coverage)
+	}
+
+	cfg := config.Default()
+	cfg.SkipDisabledJobs = true
+	skipped := hardenedSnapshot()
+	for i := range skipped.Jobs {
+		skipped.Jobs[i].Disabled = true
+	}
+	rep = evaluate(t, cfg, skipped)
+	if rep.Coverage.SkippedDisabled != 2 || !rep.Coverage.NoJobsAudited() {
+		t.Errorf("coverage = %+v, want both jobs skipped and none audited", rep.Coverage)
+	}
+
+	// Narrowed to a controller-scope control, nothing asked about jobs.
+	cfg = config.Default()
+	cfg.Include = []string{"CIS-2.1.6"}
+	if rep := evaluate(t, cfg, empty); rep.Coverage.NoJobsAudited() {
+		t.Errorf("a controller-only run did not need jobs: %+v", rep.Coverage)
+	}
+}
+
+// Completeness travels from the snapshot to the report, names and all, and a
+// snapshot that never recorded it counts as incomplete.
+func TestCoverageCarriesTheListingsCompleteness(t *testing.T) {
+	if rep := evaluate(t, config.Default(), hardenedSnapshot()); !rep.Coverage.Complete {
+		t.Error("a snapshot whose listing completed should be complete")
+	}
+
+	partial := hardenedSnapshot()
+	partial.Controller.Available["jobs"] = false
+	partial.Controller.Unlisted = []string{"prod"}
+	rep := evaluate(t, config.Default(), partial)
+	if rep.Coverage.Complete || len(rep.Coverage.Unlisted) != 1 || rep.Coverage.Unlisted[0] != "prod" {
+		t.Errorf("coverage = %+v, want incomplete with prod unlisted", rep.Coverage)
+	}
+
+	unrecorded := hardenedSnapshot()
+	delete(unrecorded.Controller.Available, "jobs")
+	if rep := evaluate(t, config.Default(), unrecorded); rep.Coverage.Complete {
+		t.Error("a snapshot that does not say its listing completed must not be taken as complete")
+	}
+}
+
+// A job's evaluation input is the job and the thresholds, nothing more. v0.1
+// added the whole controller — agents, credentials, plugins — to every one of
+// them, which no job policy reads and which made a 10,000-job scan of a
+// 1,000-agent controller take fourteen minutes.
+func TestJobInputCarriesOnlyWhatItsScopeReads(t *testing.T) {
+	job, err := toAST(hardenedSnapshot().Jobs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := toAST(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, ok := inputObject(job, cfg, nil).(ast.Object)
+	if !ok {
+		t.Fatalf("input is %T, want an object", inputObject(job, cfg, nil))
+	}
+	var keys []string
+	for _, k := range input.Keys() {
+		keys = append(keys, k.String())
+	}
+	if len(keys) != 2 || input.Get(ast.StringTerm("resource")) == nil || input.Get(ast.StringTerm("config")) == nil {
+		t.Errorf("job input keys = %v, want resource and config only", keys)
+	}
+
+	controller, _ := toAST(hardenedSnapshot().Controller)
+	meta, _ := toAST(hardenedSnapshot().Metadata)
+	if full := inputObject(controller, cfg, meta).(ast.Object); full.Get(ast.StringTerm("metadata")) == nil {
+		t.Error("the controller's input carries the metadata plugin currency reads")
+	}
+}
+
+// Parallel evaluation must not change what is reported: the same snapshot
+// gives the same findings, in the same order, run after run.
+func TestEvaluationIsDeterministic(t *testing.T) {
+	snap := hardenedSnapshot()
+	for i := 0; i < 40; i++ {
+		j := snap.Jobs[i%2]
+		j.FullName = fmt.Sprintf("folder/job-%02d", i)
+		snap.Jobs = append(snap.Jobs, j)
+	}
+	first := evaluate(t, config.Default(), snap)
+	for run := 0; run < 3; run++ {
+		again := evaluate(t, config.Default(), snap)
+		if len(again.Findings) != len(first.Findings) {
+			t.Fatalf("finding count changed: %d then %d", len(first.Findings), len(again.Findings))
+		}
+		for i := range first.Findings {
+			a, b := first.Findings[i], again.Findings[i]
+			if a.CheckID != b.CheckID || a.Resource != b.Resource || a.Status != b.Status {
+				t.Fatalf("finding %d differs between runs: %s/%s/%s then %s/%s/%s",
+					i, a.CheckID, a.Resource, a.Status, b.CheckID, b.Resource, b.Status)
+			}
+		}
+	}
+}
+
+// BenchmarkEvaluateLargeController is the shape that took v0.1 fourteen
+// minutes at 10,000 jobs: every job on a controller with a thousand agents,
+// five hundred credentials and three hundred plugins.
+func BenchmarkEvaluateLargeController(b *testing.B) {
+	snap := hardenedSnapshot()
+	for i := 0; i < 1000; i++ {
+		snap.Controller.Agents = append(snap.Controller.Agents, ci.Agent{Name: fmt.Sprintf("agent-%d", i), NumExecutors: 4, Labels: []string{"linux", "docker"}})
+	}
+	for i := 0; i < 500; i++ {
+		snap.Controller.Credentials = append(snap.Controller.Credentials, ci.Credential{ID: fmt.Sprintf("cred-%d", i), Type: "Secret text", Store: "system", Domain: "_"})
+	}
+	for i := 0; i < 300; i++ {
+		snap.Controller.Plugins = append(snap.Controller.Plugins, ci.Plugin{ShortName: fmt.Sprintf("plugin-%d", i), Version: "1.0", Enabled: true, Active: true})
+	}
+	base := snap.Jobs
+	snap.Jobs = nil
+	for i := 0; i < 1000; i++ {
+		j := base[i%len(base)]
+		j.FullName = fmt.Sprintf("team-%d/job-%d", i%50, i)
+		snap.Jobs = append(snap.Jobs, j)
+	}
+	eng, err := New(context.Background(), config.Default(), ci.PlatformJenkins)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := eng.Evaluate(context.Background(), snap); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

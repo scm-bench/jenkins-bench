@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,12 @@ func TestExampleSnapshotHoldsNoSecrets(t *testing.T) {
 			// refusing outright.
 			if strings.HasPrefix(v, "{AQAAAB") || strings.Contains(v, "-----BEGIN") {
 				t.Errorf("%s carries what looks like a secret", path)
+			}
+			// A URL with userinfo is how a token rides along in an SCM
+			// remote; the fetcher strips it, and the sample must not teach
+			// anyone otherwise.
+			if u, err := url.Parse(v); err == nil && u.User != nil {
+				t.Errorf("%s is a URL carrying userinfo", path)
 			}
 		}
 	}

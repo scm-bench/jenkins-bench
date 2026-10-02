@@ -1,6 +1,9 @@
 package jenkins
 
-import "encoding/xml"
+import (
+	"encoding/json"
+	"encoding/xml"
+)
 
 // The shapes a controller actually returns. Field names and the depth needed to
 // populate them were measured, not read from documentation — see
@@ -15,14 +18,49 @@ type instance struct {
 	NumExecutors *int  `json:"numExecutors"`
 	UseSecurity  *bool `json:"useSecurity"`
 	UseCrumbs    *bool `json:"useCrumbs"`
+	// The root object is also the built-in node, so its mode and labels come
+	// with Overall/Read — no node list needed. Nil when not exported.
+	Mode           *string  `json:"mode"`
+	AssignedLabels *[]label `json:"assignedLabels"`
 }
 
+// Every endpoint is asked for the fields the scan reads and nothing else.
+// Without tree=, Jenkins renders whatever the object exports at the default
+// depth: the root API a colour per job, a job's API up to a hundred builds and
+// every last*Build, the node list each label's tiedJobs. On a large controller
+// that is what hits the request timeout and the response cap, for fields no
+// control reads.
+const (
+	instanceTree = "useSecurity,useCrumbs,numExecutors,mode,assignedLabels[name]"
+	computerTree = "computer[_class,displayName,offline,temporarilyOffline,numExecutors,assignedLabels[name]]"
+	pluginTree   = "plugins[shortName,version,enabled,active,hasUpdate]"
+	// jobs[_class]{0,1} asks each item for at most one child: enough to tell
+	// an item that holds others from one that does not, at the cost of one
+	// small object per folder.
+	listingTree = "jobs[" + itemTree + "]"
+	// itemTree is one item's fields, as a listing reports them and as a
+	// scoping flag's target is read on its own.
+	itemTree = "_class,name,fullName,url,disabled,buildable,jobs[_class]{0,1}"
+)
+
 // item is one entry in a job listing. A folder is an item too.
+//
+// disabled and buildable are everything a Job/Read token can see of how a job
+// behaves, and notably not much: no definition, no sandbox, no authToken, no
+// assignedNode. All of those live in config.xml, which needs Job/ExtendedRead.
+// A multibranch project exports buildable only; its disabled flag is read from
+// its configuration.
 type item struct {
-	Class    string `json:"_class"`
-	Name     string `json:"name"`
-	FullName string `json:"fullName"`
-	URL      string `json:"url"`
+	Class     string `json:"_class"`
+	Name      string `json:"name"`
+	FullName  string `json:"fullName"`
+	URL       string `json:"url"`
+	Disabled  bool   `json:"disabled"`
+	Buildable bool   `json:"buildable"`
+	// Children is non-nil exactly when the item exports a jobs array — an
+	// empty one included, which is a folder with nothing in it this token
+	// can see. A job has no jobs array at all.
+	Children []json.RawMessage `json:"jobs"`
 }
 
 // jobListing is GET /api/json?tree=jobs[...] against the root or a folder.
@@ -30,18 +68,7 @@ type jobListing struct {
 	Jobs []item `json:"jobs"`
 }
 
-// jobDetail is GET /job/<path>/api/json.
-//
-// This is everything a Job/Read token can see, and it is notably not much: no
-// definition, no sandbox, no authToken, no assignedNode. All of those live in
-// config.xml, which needs Job/ExtendedRead.
-type jobDetail struct {
-	FullName  string `json:"fullName"`
-	Disabled  bool   `json:"disabled"`
-	Buildable bool   `json:"buildable"`
-}
-
-// computers is GET /computer/api/json?depth=1.
+// computers is GET /computer/api/json?tree=computer[...].
 type computers struct {
 	Computer []computer `json:"computer"`
 }
@@ -63,7 +90,8 @@ type label struct {
 // hudson.slaves.SlaveComputer.
 const builtInComputerClass = "hudson.model.Hudson$MasterComputer"
 
-// pluginManager is GET /pluginManager/api/json?depth=1 (Overall/Administer).
+// pluginManager is GET /pluginManager/api/json?tree=plugins[...]
+// (Overall/SystemRead, which Overall/Administer implies).
 // No security-warning or deprecation field exists; Jenkins renders those from
 // a feed on updates.jenkins.io, not from the controller.
 type pluginManager struct {
@@ -100,7 +128,10 @@ type credentialStore struct {
 }
 
 type credentialDomain struct {
-	Credentials []credential `json:"credentials"`
+	// A pointer, because both ways of asking at too low a depth leave the key
+	// out of the domain object rather than empty — the one difference between
+	// "not read" and "none" this endpoint offers.
+	Credentials *[]credential `json:"credentials"`
 }
 
 // credential omits displayName on purpose. Jenkins masks the secret in it —
@@ -139,6 +170,20 @@ type jobConfig struct {
 	PipelineTriggers configTriggers `xml:"properties>org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>triggers"`
 	// Sources is a multibranch project's branch sources.
 	Sources configSources `xml:"sources"`
+	// Factory is how a multibranch project turns a branch into a job: what
+	// its branches build from is decided here, not by the project's class.
+	Factory configFactory `xml:"factory"`
+}
+
+// configFactory is a multibranch project's <factory>. Only the class and the
+// flags are decoded; an inline factory's <script> never leaves the document.
+type configFactory struct {
+	Class      string `xml:"class,attr"`
+	ScriptPath string `xml:"scriptPath"`
+	// Sandbox is inline-pipeline's flag, UseSandbox the defaults plugin's.
+	// Pointers, so an absent flag is not read as an off one.
+	Sandbox    *string `xml:"sandbox"`
+	UseSandbox *string `xml:"useSandbox"`
 }
 
 type configDefinition struct {
@@ -148,8 +193,11 @@ type configDefinition struct {
 	// Sandbox applies to an inline script. A pointer so that absent is
 	// distinguishable from false: absent means the field was not in the
 	// document, which is not the same as the sandbox being off.
-	Sandbox *string   `xml:"sandbox"`
-	SCM     configSCM `xml:"scm"`
+	Sandbox *string `xml:"sandbox"`
+	// UseSandbox is pipeline-multibranch-defaults' spelling of the same flag,
+	// on the definition it gives each branch job.
+	UseSandbox *string   `xml:"useSandbox"`
+	SCM        configSCM `xml:"scm"`
 }
 
 type configSCM struct {
@@ -179,10 +227,53 @@ type configTrigger struct {
 	Spec    string `xml:"spec"`
 }
 
+// jobDocument is what the fetcher knows about one kind of job configuration,
+// keyed by the document's root element.
+type jobDocument struct {
+	// ui is true for the project types, whose build steps are form fields and
+	// whose <assignedNode>/<canRoam> decide where they run.
+	ui bool
+	// project is true where the fields this fetcher reads are where it reads
+	// them: <authToken> at the root, and triggers under <triggers> or, for a
+	// pipeline, PipelineTriggersJobProperty.
+	project bool
+}
+
+// jobDocuments are the root elements read as job configurations, each from a
+// document Jenkins wrote on 2.580.1. Anything else is a job type this fetcher
+// has not been taught — read, but with nothing in it taken as known — or not
+// a configuration at all.
+var jobDocuments = map[string]jobDocument{
+	"project":          {ui: true, project: true}, // freestyle
+	"matrix-project":   {ui: true, project: true},
+	"maven2-moduleset": {ui: true, project: true}, // maven-plugin
+	"flow-definition":  {project: true},           // pipeline
+	classMultibranch:   {},                        // decided by its branch factory
+}
+
 // Definition classes, as they appear in config.xml.
 const (
 	classCpsScmFlowDefinition = "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"
 	classCpsFlowDefinition    = "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition"
+	// The definitions a multibranch project's factories give its branch
+	// jobs, reachable when a branch job is scanned on its own.
+	classSCMBinder            = "org.jenkinsci.plugins.workflow.multibranch.SCMBinder"
+	classInlineFlowDefinition = "org.jenkinsci.plugins.inlinepipeline.InlineFlowDefinition"
+	classDefaultsBinder       = "org.jenkinsci.plugins.pipeline.multibranch.defaults.DefaultsBinder"
+)
+
+// Multibranch branch factories. Each shape was read off a 2.580.1 controller
+// with the plugin that writes it.
+const (
+	// The default: every branch builds the Jenkinsfile at scriptPath in its
+	// own source.
+	classWorkflowBranchProjectFactory = "org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory"
+	// inline-pipeline: every branch builds one <script> stored on the
+	// controller, with or without the sandbox.
+	classInlineBranchProjectFactory = "org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory"
+	// pipeline-multibranch-defaults: every branch builds a Jenkinsfile kept
+	// in a Config File Provider file on the controller.
+	classDefaultsBranchProjectFactory = "org.jenkinsci.plugins.pipeline.multibranch.defaults.PipelineBranchDefaultsProjectFactory"
 )
 
 // Jenkins item classes.
@@ -195,11 +286,21 @@ const (
 )
 
 // isContainer reports whether an item is a container to walk into rather than
-// a job to record. An organization folder is a container too: treating it as a
-// leaf would drop every multibranch project inside it from the scan, silently.
-// (A multibranch project is deliberately NOT a container — its children are
-// generated per-branch copies of one job, and descending would repeat every
-// finding per branch.)
-func isContainer(class string) bool {
-	return class == classFolder || class == classOrgFolder
+// a job to record.
+//
+// Structurally: an item that exports a jobs array holds other items. It used
+// to be two class names, Folder and OrganizationFolder, and anything else was
+// recorded as a job — a CloudBees CI team folder, or any folder subclass a
+// plugin defines, came out as one job of kind "other", and every job inside it
+// vanished from the scan without a word. The two classes stay as a fallback
+// for a listing that did not carry the array.
+//
+// A multibranch project is deliberately NOT a container, although it holds
+// items: its children are generated per-branch copies of one job, and
+// descending would repeat every finding per branch.
+func isContainer(it item) bool {
+	if it.Class == classMultibranch {
+		return false
+	}
+	return it.Children != nil || it.Class == classFolder || it.Class == classOrgFolder
 }

@@ -38,7 +38,7 @@ outdated := [p.shortName |
 
 result := {
 	"status": "MANUAL",
-	"details": "The plugin list could not be read (it requires Overall/Administer), so plugin currency is unknown.",
+	"details": "The plugin list could not be read (it requires Overall/SystemRead or Overall/Administer), so plugin currency is unknown.",
 } if {
 	not lib.available("plugins")
 } else := {

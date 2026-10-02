@@ -9,9 +9,19 @@ package ci
 
 import "time"
 
-// SchemaVersion is bumped whenever the snapshot shape changes in a way that
-// existing policies would misread.
-const SchemaVersion = "1"
+// SchemaVersion is bumped whenever the snapshot shape changes, and a reader
+// refuses any version it was not built for.
+//
+// "2": what a version 1 file records is what v0.1 believed, and v0.1 was
+// wrong in ways the current controls decide on — every multibranch project's
+// definition was "scm" whatever its branch factory, a trigger was only ever
+// <authToken>, and an empty credential store counted as complete for a
+// SystemRead token. A version 1 file also lacks what the current scan relies
+// on: whether its job list was complete, the triggers and scripts it
+// resolved, and the built-in node's mode and labels. Read anyway, it would
+// produce a report that looks like a scan of the controller and is a scan of
+// what an old file happened to record.
+const SchemaVersion = "2"
 
 // Platform identifiers used in Metadata.Platform and check metadata.
 const (
@@ -46,15 +56,24 @@ type Metadata struct {
 type Controller struct {
 	// Version comes from the X-Jenkins response header, which is returned
 	// without credentials — so it is known even when nothing else is.
-	Version     string          `json:"version,omitempty"`
-	Security    Security        `json:"security"`
-	BuiltInNode BuiltInNode     `json:"builtInNode"`
-	Agents      []Agent         `json:"agents,omitempty"`
+	Version     string      `json:"version,omitempty"`
+	Security    Security    `json:"security"`
+	BuiltInNode BuiltInNode `json:"builtInNode"`
+	Agents      []Agent     `json:"agents,omitempty"`
+	// Credentials are the controller's own stores — the system store and any
+	// other the root credentials page lists. Folder stores are not read, so a
+	// credential defined in a folder is not here.
 	Credentials []Credential    `json:"credentials,omitempty"`
 	Plugins     []Plugin        `json:"plugins,omitempty"`
 	UpdateSite  UpdateSite      `json:"updateSite"`
 	Available   map[string]bool `json:"available"`
 	Errors      []string        `json:"errors,omitempty"`
+	// Unlisted names every container whose job list could not be read: "/"
+	// for the top level, a folder's full name otherwise. The jobs inside one
+	// are missing from Jobs rather than judged, so a snapshot with any is
+	// incomplete — available["jobs"] is false — and a scan of it exits 2
+	// unless scan.allowIncomplete accepts that.
+	Unlisted []string `json:"unlisted,omitempty"`
 }
 
 // Security is what can be established about the controller's posture: flags
@@ -92,6 +111,14 @@ type BuiltInNode struct {
 	// controller exactly as one pinned to "built-in" does. Resolving where a
 	// job runs against a hard-coded pair would have missed every such job.
 	Labels []string `json:"labels,omitempty"`
+	// LabelsKnown is whether Labels was read, from the instance API or the
+	// node list. Without it a job pinned to a label other than the two
+	// well-known names cannot be placed.
+	LabelsKnown bool `json:"labelsKnown"`
+	// Mode is NORMAL — the node takes any job that may roam — or EXCLUSIVE,
+	// only jobs whose label expression names it. ModeKnown says it was read.
+	Mode      string `json:"mode,omitempty"`
+	ModeKnown bool   `json:"modeKnown"`
 }
 
 // Agent is one node attached to the controller.
@@ -164,9 +191,28 @@ type Job struct {
 	Buildable  bool       `json:"buildable"`
 	Definition Definition `json:"definition"`
 	Triggers   []Trigger  `json:"triggers,omitempty"`
+	// Scripts are the Groovy scripts in the job's configuration outside its
+	// pipeline definition — a System Groovy build step, a Groovy Postbuild
+	// publisher, an Active Choices parameter, a Job DSL step — each by the
+	// class that holds it and whether it runs in the sandbox. Never the
+	// script itself.
+	Scripts []Script `json:"scripts,omitempty"`
 	// RemoteTriggerToken is whether one is configured. Never the token.
 	RemoteTriggerToken      bool `json:"remoteTriggerToken"`
 	RemoteTriggerTokenKnown bool `json:"remoteTriggerTokenKnown"`
+	// UnauthenticatedTriggers names each configured way to start this job's
+	// builds that does not go through Jenkins' per-user Job/Build permission:
+	// "authToken" (Trigger builds remotely) or "GenericTrigger" (Generic
+	// Webhook Trigger). Mechanisms, never a token.
+	UnauthenticatedTriggers []string `json:"unauthenticatedTriggers,omitempty"`
+	// UnrecognizedTriggers are trigger classes the fetcher has not been
+	// taught, so whether they skip that authorization is unknown.
+	UnrecognizedTriggers []string `json:"unrecognizedTriggers,omitempty"`
+	// TriggersKnown is whether the configuration read is where this job's
+	// triggers live. False for a multibranch project: its builds run under
+	// triggers declared in each branch's Jenkinsfile, which land in the
+	// generated branch jobs, and the scan does not read those.
+	TriggersKnown bool `json:"triggersKnown"`
 	// RunsOnBuiltInNode is resolved by the fetcher from the job's label
 	// expression, its canRoam flag and the built-in node's labels. A rule asks
 	// whether the job can run on the controller, never how labels match.
@@ -188,7 +234,13 @@ const (
 
 // Definition is how the build is described.
 type Definition struct {
-	Source     string   `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Class is the class that decided Source: a pipeline's <definition>, or
+	// a multibranch project's branch <factory>. Kept because it is what
+	// explains an unknown source, and the job's own class does not — every
+	// pipeline is a WorkflowJob whatever defines it. Empty for the project
+	// types, whose root element is the answer.
+	Class      string   `json:"class,omitempty"`
 	ScriptPath string   `json:"scriptPath,omitempty"`
 	SCMURLs    []string `json:"scmUrls,omitempty"`
 	// Sandbox is whether the Groovy sandbox is on. Only meaningful for
@@ -200,12 +252,14 @@ type Definition struct {
 // Definition sources: the resolved answer to "are the build steps defined as
 // code?".
 const (
-	// SourceSCM is a pipeline read from a Jenkinsfile in version control. A
-	// multibranch project is always this; that is what it does.
+	// SourceSCM is a pipeline read from a Jenkinsfile in version control —
+	// including a multibranch project whose branch factory reads each
+	// branch's own Jenkinsfile, which is the default but not the only kind.
 	SourceSCM = "scm"
 	// SourceInline is a pipeline script stored in the controller. It is code,
 	// but it is not in version control, so it is neither reviewed nor
-	// recoverable.
+	// recoverable. A multibranch project whose factory hands every branch a
+	// script kept on the controller is this too.
 	SourceInline = "inline"
 	// SourceUI is a freestyle or matrix job, whose build steps are
 	// configuration clicked into a form.
@@ -215,6 +269,16 @@ const (
 	// leaves Available["config"] false and no Definition at all.
 	SourceUnknown = "unknown"
 )
+
+// Script is one Groovy script a job carries outside its definition.
+type Script struct {
+	// Holder is the class of the build step, publisher or parameter that
+	// holds the script, e.g. hudson.plugins.groovy.SystemGroovy.
+	Holder string `json:"holder"`
+	// Sandbox is whether script-security runs it in the Groovy sandbox.
+	// Outside it, an approved script runs with the controller's privileges.
+	Sandbox bool `json:"sandbox"`
+}
 
 // Trigger is one configured build trigger. Spec is a cron-like expression and
 // never a token.

@@ -4,14 +4,17 @@
   "package": "scmbench.rules.cis_2_3_5",
   "scope": "job",
   "severity": "MEDIUM",
-  "platforms": ["jenkins"],
+  "platforms": [
+    "jenkins"
+  ],
   "automated": true,
   "title": "Ensure access to build process triggering is minimized",
-  "description": "A remote trigger token is a shared secret in a URL: anyone who has ever seen it can start this build, from anywhere, with no account and no audit trail naming them. URLs leak — into logs, browser history, chat messages — and a leaked one cannot be traced or individually revoked. Triggering should go through Jenkins' own authorization, where it is per-user and logged.",
-  "remediation": "Job -> Configure -> Build Triggers: untick \"Trigger builds remotely\" and remove the authentication token. Replace callers with an authenticated request from a service account (POST /job/<name>/build with an API token and its user's Job/Build permission), or with an SCM webhook, both of which are attributable and revocable per caller. The permission matrix governing who may trigger builds is not exposed by any API and still needs review by hand.",
-  "fixSummary": "Untick \"Trigger builds remotely\" at Configure -> Build Triggers and remove the token.",
+  "description": "A token that starts a build is a shared secret: anyone who has ever seen it can start this build, from anywhere, with no account and no audit trail naming them. That is true of the core remote trigger token and of webhook plugins alike — a Generic Webhook Trigger token is accepted by an endpoint that needs no Jenkins login at all, and without a token it lets anyone who can merely read the job start it. Tokens leak into logs, browser history and chat messages, and a leaked one cannot be traced or individually revoked. Triggering should go through Jenkins' own authorization, where it is per-user and logged.",
+  "remediation": "Job -> Configure -> Build Triggers: untick \"Trigger builds remotely\" and remove the authentication token, and remove any Generic Webhook Trigger. Replace callers with an authenticated request from a service account (POST /job/<name>/build with an API token and its user's Job/Build permission), or with \"GitHub hook trigger for GITScm polling\", which only makes Jenkins poll the repository and builds nothing that has not changed — both are attributable and revocable per caller. For a multibranch project the triggers live in each branch's Jenkinsfile (triggers { } or properties([pipelineTriggers(...)])), so the change is a commit there. The permission matrix governing who may trigger builds is not exposed by any API and still needs review by hand.",
+  "fixSummary": "Remove remote trigger tokens and webhook triggers at the job's Configure -> Build Triggers.",
   "references": [
     "https://www.cisecurity.org/benchmark/software-supply-chain-security",
-    "https://www.jenkins.io/doc/book/using/remote-access-api/#RemoteaccessAPI-Submittingjobs"
+    "https://www.jenkins.io/doc/book/using/remote-access-api/#RemoteaccessAPI-Submittingjobs",
+    "https://plugins.jenkins.io/generic-webhook-trigger/"
   ]
 }

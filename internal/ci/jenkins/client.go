@@ -5,6 +5,8 @@ package jenkins
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,10 +24,12 @@ import (
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
-	username   string
-	token      string
-	maxRetries int
-	onRequest  func(RequestEvent)
+	// probeClient sends the unauthenticated probe. It follows no redirect at
+	// all; see ProbeAnonymous.
+	probeClient *http.Client
+	username    string
+	token       string
+	maxRetries  int
 
 	// Logf receives progress detail. Nil means silent.
 	Logf func(format string, args ...any)
@@ -33,8 +37,9 @@ type Client struct {
 	Warnf func(format string, args ...any)
 }
 
-// RequestEvent reports one completed request, for progress display and for the
-// scan trace.
+// RequestEvent reports one request the client sent — each attempt, and each
+// redirect hop it followed — for the scan trace, its closing account of what
+// was sent, and the progress line.
 type RequestEvent struct {
 	Method  string
 	Path    string
@@ -56,6 +61,12 @@ type Options struct {
 
 	Timeout    time.Duration
 	MaxRetries int
+	// Concurrency is how many requests the caller keeps in flight, so that
+	// many connections stay open between them.
+	Concurrency int
+	// CAFile is a PEM bundle of certificate authorities trusted in addition
+	// to the system pool.
+	CAFile string
 	// Insecure disables certificate verification.
 	Insecure bool
 	// AllowPlaintext permits sending credentials over http:// to a non-loopback
@@ -93,21 +104,90 @@ func NewClient(opts Options) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	// The clone keeps http.ProxyFromEnvironment, so HTTPS_PROXY and NO_PROXY
+	// are honoured as they are by every other Go tool.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if opts.CAFile != "" {
+		tlsConfig, err := tlsWithCAFile(opts.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = tlsConfig
+	}
 	if opts.Insecure {
 		transport.TLSClientConfig = tlsInsecureConfig()
 	}
+	// net/http keeps two idle connections per host by default. With eight
+	// job fetches in flight the other six were torn down after every
+	// request, and a 400-job scan opened 246 TCP connections — a TLS
+	// handshake each, against a production controller.
+	if opts.Concurrency > http.DefaultMaxIdleConnsPerHost {
+		transport.MaxIdleConnsPerHost = opts.Concurrency
+	}
 
+	observed := &observedTransport{base: transport, onRequest: opts.OnRequest}
 	return &Client{
-		baseURL:    u,
-		httpClient: &http.Client{Timeout: timeout, Transport: transport},
+		baseURL: u,
+		httpClient: &http.Client{
+			Timeout:       timeout,
+			Transport:     observed,
+			CheckRedirect: checkRedirect,
+		},
+		probeClient: &http.Client{
+			Timeout:   timeout,
+			Transport: observed,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		username:   opts.Username,
 		token:      opts.Token,
 		maxRetries: opts.MaxRetries,
-		onRequest:  opts.OnRequest,
 		Logf:       opts.Logf,
 		Warnf:      opts.Warnf,
 	}, nil
+}
+
+// attemptKey carries a request's attempt number to the transport that
+// reports it.
+type attemptKey struct{}
+
+// observedTransport sees every request the client actually sends, and is the
+// last place one can be stopped.
+//
+// The scan's closing line accounts for what was sent, and it is only worth
+// trusting if it counts at the wire: a redirect hop the client follows is a
+// request too, and was invisible to a count kept per call. And the read-only
+// promise is kept here as well as by the API's shape — a method other than GET
+// or HEAD is refused before it leaves the process, and still reported, so the
+// account says NOT READ-ONLY rather than nothing.
+type observedTransport struct {
+	base      http.RoundTripper
+	onRequest func(RequestEvent)
+}
+
+func (t *observedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	attempt, _ := req.Context().Value(attemptKey{}).(int)
+	event := RequestEvent{Method: req.Method, Path: req.URL.RequestURI(), Attempt: attempt}
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		event.Err = fmt.Errorf("refused to send %s %s: this tool only reads", req.Method, req.URL.Path)
+		t.emit(event)
+		return nil, event.Err
+	}
+	started := time.Now()
+	resp, err := t.base.RoundTrip(req)
+	event.Took, event.Err = time.Since(started), err
+	if resp != nil {
+		event.Status = resp.StatusCode
+	}
+	t.emit(event)
+	return resp, err
+}
+
+func (t *observedTransport) emit(e RequestEvent) {
+	if t.onRequest != nil {
+		t.onRequest(e)
+	}
 }
 
 // BaseURL returns the controller root.
@@ -148,17 +228,25 @@ func IsForbidden(err error) bool {
 
 // GetJSON reads path and decodes the response into out.
 func (c *Client) GetJSON(ctx context.Context, path string, out any) error {
-	body, _, err := c.raw(ctx, path, true)
+	_, err := c.GetJSONHeaders(ctx, path, out)
+	return err
+}
+
+// GetJSONHeaders is GetJSON that also returns the response headers — of a
+// refusal as well as of a success, because a controller stamps its version on
+// both.
+func (c *Client) GetJSONHeaders(ctx context.Context, path string, out any) (http.Header, error) {
+	body, headers, err := c.raw(ctx, path, true)
 	if err != nil {
-		return err
+		return headers, err
 	}
 	if out == nil {
-		return nil
+		return headers, nil
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("GET %s: decode response: %w", path, err)
+		return headers, fmt.Errorf("GET %s: decode response: %w", path, err)
 	}
-	return nil
+	return headers, nil
 }
 
 // GetRaw reads path and returns the body undecoded, for config.xml.
@@ -167,27 +255,58 @@ func (c *Client) GetRaw(ctx context.Context, path string) ([]byte, error) {
 	return body, err
 }
 
-// Head reads path only for its response headers. Used for the version, which
-// arrives as X-Jenkins on any response including the login page.
-func (c *Client) Head(ctx context.Context, path string) (http.Header, error) {
-	_, headers, err := c.raw(ctx, path, true)
-	return headers, err
+// Probe is what an unauthenticated request for the instance API got back.
+type Probe struct {
+	// Allowed is whether an anonymous client was served the Jenkins API.
+	Allowed bool
+	// Conclusive is false when the answer settles nothing either way. A
+	// probe that never ran, or was sent somewhere else, is not a denial.
+	Conclusive bool
+	// Reason says why an inconclusive probe is one.
+	Reason string
 }
+
+// classHudson is the _class of the controller's root object, which is what an
+// answer from the Jenkins API says it is.
+const classHudson = "hudson.model.Hudson"
 
 // ProbeAnonymous issues path with no credentials — the only way to answer
 // "can an unauthenticated client read this?", since the authorization strategy
-// is not exposed. conclusive is false on transport errors: a probe that never
-// ran is not a denial.
-func (c *Client) ProbeAnonymous(ctx context.Context, path string) (allowed, conclusive bool) {
-	_, _, err := c.raw(ctx, path, false)
-	if err == nil {
-		return true, true
+// is not exposed.
+//
+// Only the Jenkins API itself counts as access: a 200 whose body is the root
+// object. Behind an authenticating proxy an unauthenticated request is
+// redirected to a sign-in page that answers 200, and the probe used to follow
+// the redirect and take that 200 for the API — a HIGH failure, "anyone can
+// read this controller", on one nobody can reach without signing in. It now
+// follows no redirect: a 401 or 403 is a denial; a redirect, or a 200 that is
+// not the API, settles nothing, and the control says so instead of guessing.
+func (c *Client) ProbeAnonymous(ctx context.Context, path string) Probe {
+	body, headers, err := c.raw(ctx, path, false)
+	status := Status(err)
+	switch {
+	case err == nil:
+		var root struct {
+			Class string `json:"_class"`
+		}
+		if json.Unmarshal(body, &root) == nil && root.Class == classHudson {
+			return Probe{Allowed: true, Conclusive: true}
+		}
+		return Probe{Reason: "an unauthenticated request was answered with something other than the Jenkins API, such as a sign-in page"}
+	case status == http.StatusForbidden || status == http.StatusUnauthorized:
+		return Probe{Conclusive: true}
+	case status >= 300 && status < 400:
+		where := "elsewhere"
+		if headers != nil {
+			if loc, perr := url.Parse(headers.Get("Location")); perr == nil && headers.Get("Location") != "" {
+				where = displayURL(c.baseURL.ResolveReference(loc))
+			}
+		}
+		return Probe{Reason: fmt.Sprintf("an unauthenticated request was redirected to %s rather than answered; "+
+			"if that is a sign-in page, anonymous users cannot reach the controller", where)}
+	default:
+		return Probe{Reason: fmt.Sprintf("the unauthenticated request failed (%v)", err)}
 	}
-	switch Status(err) {
-	case http.StatusForbidden, http.StatusUnauthorized:
-		return false, true
-	}
-	return false, false
 }
 
 // raw issues a GET and returns the body and response headers, retrying
@@ -219,30 +338,54 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 		}
 		waited = false
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		req, err := http.NewRequestWithContext(context.WithValue(ctx, attemptKey{}, attempt), http.MethodGet, endpoint.String(), nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("build request for %s: %w", path, err)
 		}
 		req.Header.Set("Accept", "application/json, text/xml, */*")
-		if authenticate && c.username != "" {
-			req.SetBasicAuth(c.username, c.token)
+		client := c.probeClient
+		if authenticate {
+			client = c.httpClient
+			if c.username != "" {
+				req.SetBasicAuth(c.username, c.token)
+			}
 		}
 
-		started := time.Now()
-		resp, err := c.httpClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			// Transport errors are worth retrying; a cancelled context is not.
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
-			c.emit(req.Method, path, 0, time.Since(started), attempt, err)
+			// Nor is a redirect this client refused to follow, or a
+			// certificate nobody vouches for: the next attempt meets the
+			// same answer, and the backoff only made a misconfiguration take
+			// seconds longer to report.
+			var refused *redirectError
+			if errors.As(err, &refused) {
+				return nil, nil, refused
+			}
+			if certificateError(err) {
+				return nil, nil, fmt.Errorf("GET %s: %w\n"+
+					"if the controller's certificate comes from an internal CA, name a bundle holding it with scan.caFile", path, err)
+			}
 			lastErr = fmt.Errorf("GET %s: %w", path, err)
 			continue
 		}
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		// One byte over the cap is read so that a body at the cap can be
+		// told from one past it. A cut-off body used to be decoded as if it
+		// were whole — an "unexpected end of JSON input" at best, and for an
+		// XML document a parse of whatever made it through.
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(maxBody)+1))
 		resp.Body.Close()
-		c.emit(req.Method, path, resp.StatusCode, time.Since(started), attempt, readErr)
+		if readErr == nil && len(body) > maxBody {
+			readErr = errBodyTooLarge
+		}
+		if errors.Is(readErr, errBodyTooLarge) {
+			// Retrying would fetch the same too-large body again.
+			return nil, resp.Header, fmt.Errorf("GET %s: %w", path, readErr)
+		}
 		if readErr != nil {
 			lastErr = fmt.Errorf("GET %s: read body: %w", path, readErr)
 			continue
@@ -274,13 +417,6 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 	return nil, nil, lastErr
 }
 
-func (c *Client) emit(method, path string, status int, took time.Duration, attempt int, err error) {
-	if c.onRequest == nil {
-		return
-	}
-	c.onRequest(RequestEvent{Method: method, Path: path, Status: status, Took: took, Attempt: attempt, Err: err})
-}
-
 func (c *Client) logf(format string, args ...any) {
 	if c.Logf != nil {
 		c.Logf(format, args...)
@@ -291,6 +427,98 @@ func (c *Client) warnf(format string, args ...any) {
 	if c.Warnf != nil {
 		c.Warnf(format, args...)
 	}
+}
+
+// certificateError reports whether err is the TLS handshake refusing the
+// controller's certificate.
+func certificateError(err error) bool {
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var verification *tls.CertificateVerificationError
+	return errors.As(err, &unknownAuthority) ||
+		errors.As(err, &hostname) ||
+		errors.As(err, &invalid) ||
+		errors.As(err, &verification)
+}
+
+// maxBody caps one response. Every endpoint is asked for a handful of fields
+// per item, so a body this large is something other than the API answering.
+// A variable only so a test need not allocate 64 MiB to cross it.
+var maxBody = 64 << 20
+
+// errBodyTooLarge is a response past maxBody.
+var errBodyTooLarge = errors.New("the response is larger than the 64 MiB this scan reads, so it was not used")
+
+// maxRedirects bounds how many same-origin redirects one request follows.
+const maxRedirects = 5
+
+// redirectError is a redirect the client refused to follow.
+type redirectError struct {
+	from, to *url.URL
+	reason   string
+}
+
+func (e *redirectError) Error() string {
+	return fmt.Sprintf("refusing to follow a redirect from %s to %s: %s",
+		displayURL(e.from), displayURL(e.to), e.reason)
+}
+
+// checkRedirect follows a redirect only within the origin the scan was
+// pointed at.
+//
+// net/http re-sends the Authorization header across a redirect to the same
+// host whatever the scheme, so an https controller answering 302 with an
+// http:// Location — a TLS-terminating proxy that rewrites it, an SSO realm
+// bouncing the first request — had the token sent in cleartext on the next hop,
+// past the cleartext refusal that guards --url. A redirect to another host or
+// port is refused too: the credential was handed over for one controller.
+// Within the origin a redirect is harmless and followed, a bounded number of
+// times.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	from, to := via[0].URL, req.URL
+	if !sameOrigin(from, to) {
+		if strings.EqualFold(from.Scheme, "https") && strings.EqualFold(to.Scheme, "http") {
+			return &redirectError{from: from, to: to,
+				reason: "it would send the token in cleartext; point --url at the address the controller serves over https"}
+		}
+		return &redirectError{from: from, to: to,
+			reason: "it leads to a different origin, and the token was given for this one; point --url at the address the controller answers on"}
+	}
+	if len(via) >= maxRedirects {
+		return &redirectError{from: from, to: to, reason: fmt.Sprintf("stopped after %d redirects", maxRedirects)}
+	}
+	return nil
+}
+
+// sameOrigin compares scheme, host and port, with the scheme's default port
+// filled in.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+// displayURL renders a URL for an error message: no userinfo, no query.
+func displayURL(u *url.URL) string {
+	shown := *u
+	shown.User = nil
+	shown.RawQuery = ""
+	shown.Fragment = ""
+	return shown.String()
 }
 
 func checkTransport(u *url.URL, allowPlaintext bool) error {

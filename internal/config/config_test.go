@@ -173,3 +173,66 @@ func marshalForPolicy(c Config) (string, error) {
 	body, err := json.Marshal(c)
 	return string(body), err
 }
+
+// A CA bundle verifies the controller's certificate; insecure skips the check
+// and would quietly make the bundle meaningless.
+func TestCAFileAndInsecureAreExclusive(t *testing.T) {
+	cfg := Default()
+	cfg.Scan.CAFile = "/etc/ssl/corp.pem"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("caFile alone is valid: %v", err)
+	}
+	cfg.Scan.Insecure = true
+	if err := cfg.Validate(); err == nil {
+		t.Error("caFile with insecure should be refused")
+	}
+}
+
+// An exception without a reason or an end date is how accepted risk becomes
+// forgotten risk, so neither is optional, and a malformed one is refused at
+// load rather than silently matching nothing.
+func TestExceptionsAreValidated(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "jenkins-bench.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    reason: vendor job\n    expires: 2027-03-31\n"
+	if _, err := Load(write(t, valid)); err != nil {
+		t.Fatalf("a complete exception was refused: %v", err)
+	}
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"no control", "exceptions:\n  - resources: [platform/*]\n    reason: r\n    expires: 2027-03-31\n", "control is required"},
+		{"no resources", "exceptions:\n  - control: CIS-2.3.5\n    reason: r\n    expires: 2027-03-31\n", "resources is required"},
+		{"empty resource", "exceptions:\n  - control: CIS-2.3.5\n    resources: ['']\n    reason: r\n    expires: 2027-03-31\n", "empty resource pattern"},
+		{"bad glob", "exceptions:\n  - control: CIS-2.3.5\n    resources: ['platform/[']\n    reason: r\n    expires: 2027-03-31\n", "platform/["},
+		{"no reason", "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    expires: 2027-03-31\n", "reason is required"},
+		{"no expiry", "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    reason: r\n", "expires is required"},
+		{"bad expiry", "exceptions:\n  - control: CIS-2.3.5\n    resources: [platform/*]\n    reason: r\n    expires: next spring\n", "not a date"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(write(t, tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "exceptions[0]") {
+				t.Errorf("err = %v, want it to mention exceptions[0] and %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestProgressIsValidated(t *testing.T) {
+	for _, ok := range []string{"full", "compact", "off", "OFF"} {
+		cfg := Default()
+		cfg.Scan.Progress = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("progress %q: %v", ok, err)
+		}
+	}
+	cfg := Default()
+	cfg.Scan.Progress = "loud"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "scan.progress") {
+		t.Errorf("an unknown progress mode should be refused: %v", err)
+	}
+}

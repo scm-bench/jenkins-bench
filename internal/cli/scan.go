@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -22,17 +25,24 @@ type scanOptions struct {
 	username string
 	token    string
 
+	folders []string
+	jobs    []string
+
 	configPath  string
 	sets        []string
 	snapshotIn  string
 	snapshotOut string
 
 	format         string
+	legacyFormat   string
+	outputFile     string
 	details        string
 	detailsSet     bool
 	showPassed     bool
+	maxResources   int
 	noRemediations bool
 	noColor        bool
+	verbose        bool
 
 	scan config.Scan
 }
@@ -54,7 +64,8 @@ What the token can read decides what the report can say. A least-privilege
 token — Overall/Read plus Job/Read — cannot fetch a job's config.xml, and
 nothing about how a job is defined appears anywhere else, so every job-scope
 control reports MANUAL. Job/ExtendedRead makes them answerable;
-Overall/Administer additionally enables the plugin and credential controls.
+Overall/SystemRead additionally enables the plugin controls, and credential
+metadata needs Credentials/View, which Overall/Administer implies.
 None of that is guessed at: what could not be read is reported as MANUAL and
 left out of the score.
 
@@ -63,6 +74,11 @@ Credentials may be supplied by flag or environment:
 
 Use an API token rather than a password — Manage Jenkins -> People -> <user> ->
 Security -> API Token.
+
+--folder and --job narrow the scan to the items named, by full name, and add
+up: a folder brings every job under it at any depth, a job brings itself. A
+name the controller does not know — or will not show this token — stops the
+scan with exit 2 rather than reporting on nothing.
 
 --snapshot-out writes the captured snapshot; --snapshot-in evaluates one
 already captured, with no network and no token, which is how a scan run on a
@@ -89,19 +105,32 @@ token that can read very little is the common case.`,
 	f.StringVar(&opts.baseURL, "url", "", "controller URL (or JENKINS_URL)")
 	f.StringVar(&opts.username, "username", "", "user the API token belongs to (or JENKINS_USER)")
 	f.StringVar(&opts.token, "token", "", "API token (or JENKINS_TOKEN)")
-	f.StringVar(&opts.configPath, "config", "", "path to a configuration file")
+	// StringArray, not StringSlice: a Jenkins job name may hold a comma.
+	f.StringArrayVar(&opts.folders, "folder", nil, "scan only the jobs under this folder, by full name (e.g. platform/backend); repeatable")
+	f.StringArrayVar(&opts.jobs, "job", nil, "scan only this job, by full name (e.g. platform/api-service); repeatable")
+	f.StringVarP(&opts.configPath, "config", "c", "", "path to a configuration file; found automatically as ./jenkins-bench.yaml or in the user config directory")
 	f.StringArrayVar(&opts.sets, "set", nil, "override a config key, e.g. --set scan.failOn=none")
 	f.StringVar(&opts.snapshotIn, "snapshot-in", "", "evaluate a snapshot from disk instead of scanning")
 	f.StringVar(&opts.snapshotOut, "snapshot-out", "", "write the captured snapshot to this path")
-	f.StringVar(&opts.format, "format", report.FormatTable, "output format: "+strings.Join(report.Formats(), ", "))
+	f.StringVarP(&opts.format, "output", "o", report.FormatTable, "report format: "+strings.Join(report.Formats(), ", "))
+	// --format is what v0.1 called it. Kept so a pipeline written against it
+	// does not break on upgrade, hidden so nobody new learns it, and named as
+	// deprecated on stderr whenever it is used.
+	f.StringVar(&opts.legacyFormat, "format", "", "deprecated: use -o/--output")
+	f.StringVar(&opts.outputFile, "output-file", "", "write the report to this file (mode 0600) instead of stdout")
+	_ = f.MarkHidden("format")
 	// The default table is an overview aggregated by control, so one
 	// misconfiguration across fifty jobs reads as the single thing it is.
 	// --details is the other question: what is wrong with *this* job.
 	f.StringVar(&opts.details, "details", "", "expand to per-resource sections; --details=<resource|control>[,...] narrows them")
 	f.Lookup("details").NoOptDefVal = " "
 	f.BoolVar(&opts.showPassed, "show-passed", false, "include passing controls in the report")
+	// A controller with thousands of jobs makes --details thousands of
+	// sections; this caps them, and says how many were left out.
+	f.IntVar(&opts.maxResources, "max-resources", report.DefaultMaxResources, "with --details: how many resources get a section of their own; 0 means every one")
 	f.BoolVar(&opts.noRemediations, "no-remediations", false, "omit the remediation section")
 	f.BoolVar(&opts.noColor, "no-color", false, "disable ANSI colour")
+	f.BoolVarP(&opts.verbose, "verbose", "v", false, "print every request on stderr as it completes")
 
 	// Deployment settings live in the config, not in flags — but an error
 	// message or muscle memory that suggests the flag form should meet
@@ -112,14 +141,17 @@ token that can read very little is the common case.`,
 
 // movedFlags maps flag-shaped spellings of config keys to the real key.
 var movedFlags = map[string]string{
-	"fail-on":         "scan.failOn",
-	"fail-under":      "scan.failUnder",
-	"max-manual":      "scan.maxManual",
-	"concurrency":     "scan.concurrency",
-	"timeout":         "scan.timeout",
-	"max-duration":    "scan.maxDuration",
-	"insecure":        "scan.insecure",
-	"allow-plaintext": "scan.allowPlaintext",
+	"fail-on":          "scan.failOn",
+	"fail-under":       "scan.failUnder",
+	"max-manual":       "scan.maxManual",
+	"concurrency":      "scan.concurrency",
+	"timeout":          "scan.timeout",
+	"max-duration":     "scan.maxDuration",
+	"insecure":         "scan.insecure",
+	"allow-plaintext":  "scan.allowPlaintext",
+	"allow-incomplete": "scan.allowIncomplete",
+	"ca-file":          "scan.caFile",
+	"progress":         "scan.progress",
 }
 
 // movedFlagError upgrades "unknown flag" for a config-key spelling into the
@@ -140,17 +172,73 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		ctx = context.Background()
 	}
 
-	cfg, err := loadScanConfig(opts)
+	if err := resolveFormat(cmd, opts); err != nil {
+		return err
+	}
+	// Refused rather than ignored: a snapshot already holds a fixed set of
+	// jobs, and a report of all of them that looked like the narrowed scan
+	// asked for would be the wrong answer to the question typed.
+	if opts.snapshotIn != "" && (len(opts.folders) > 0 || len(opts.jobs) > 0) {
+		return fmt.Errorf("--folder and --job narrow what is fetched from a controller, so they cannot be combined with --snapshot-in\n" +
+			"the snapshot already holds a fixed set of jobs; capture it again with --folder or --job to narrow it")
+	}
+	// Refused rather than ignored: the overview has no per-resource sections
+	// to cap, and a flag that silently does nothing reads as one that worked.
+	if cmd.Flags().Changed("max-resources") && !cmd.Flags().Changed("details") {
+		return fmt.Errorf("--max-resources caps the per-resource sections, which only --details prints; combine the two")
+	}
+	if opts.maxResources < 0 {
+		return fmt.Errorf("--max-resources must be 0 (every resource) or more, got %d", opts.maxResources)
+	}
+
+	cfg, path, err := loadScanConfig(opts)
 	if err != nil {
 		return err
 	}
 	opts.scan = cfg.Scan
-
-	if opts.format != "" && !validFormat(opts.format) {
-		return fmt.Errorf("unknown format %q; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
+	// Named on stderr whenever a file was read, found or given. A config file
+	// changes how the scan judges and when it fails, and one found in the
+	// working directory may have arrived with the pull request being gated:
+	// a threshold that came quietly from a file is an exit code nobody can
+	// explain.
+	if path != "" {
+		stderr := cmd.ErrOrStderr()
+		console.Writer{W: stderr, P: console.Painter{Enabled: !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)}}.
+			Line(console.Info, "using config %s", path)
 	}
 
-	snapshot, err := obtainSnapshot(ctx, opts, cfg)
+	if opts.format != "" && !validFormat(opts.format) {
+		return fmt.Errorf("unknown report format %q for -o; use one of %s", opts.format, strings.Join(report.Formats(), ", "))
+	}
+
+	// The bundle is compiled, and the control selection checked, before the
+	// controller is contacted: a typo in include, exclude or an exception
+	// refuses to start rather than costing a full scan to find out.
+	eng, err := engine.New(ctx, cfg, ci.PlatformJenkins)
+	if err != nil {
+		return err
+	}
+
+	// The tracer exists even when it prints nothing per request: its closing
+	// line accounts for what the token was used for, and that belongs in a
+	// CI log as much as on a terminal.
+	stderr := cmd.ErrOrStderr()
+	colour := !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)
+	// scan.progress is the deployment's choice; -v was typed just now, and
+	// wins over it.
+	shown := strings.ToLower(cfg.Scan.Progress)
+	if opts.verbose {
+		shown = "full"
+	}
+	trace := newTracer(stderr, colour, shown == "full")
+	// One self-overwriting line on a terminal, unless every request is
+	// already being printed, or nothing is to be.
+	progress := newProgressWriter(stderr, shown == "compact")
+	snapshot, err := obtainSnapshot(ctx, stderr, colour, opts, cfg, trace, progress)
+	progress.clear()
+	if line, tag := trace.summary(); line != "" {
+		console.Writer{W: stderr, P: console.Painter{Enabled: colour}}.Line(tag, "%s", line)
+	}
 	if err != nil {
 		return err
 	}
@@ -161,30 +249,66 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		}
 	}
 
-	eng, err := engine.New(ctx, cfg, ci.PlatformJenkins)
-	if err != nil {
-		return err
-	}
 	rep, err := eng.Evaluate(ctx, snapshot)
 	if err != nil {
 		return err
 	}
+	// Printed whatever the verbosity: a lapsed exception is a finding that
+	// starts failing the run today, and the exit code alone would not say why.
+	if len(rep.ExceptionWarnings) > 0 {
+		w := console.Writer{W: stderr, P: console.Painter{Enabled: colour}}
+		for _, warning := range rep.ExceptionWarnings {
+			w.Line(console.Warn, "%s", warning)
+		}
+	}
 
+	// Rendered into memory first, so a report that fails half-way never
+	// leaves half a report behind — on stdout or in a file.
 	out := cmd.OutOrStdout()
+	toTerminal := opts.outputFile == "" && isTerminal(out)
 	renderOpts := report.Options{
 		Format:         opts.format,
-		Color:          !opts.noColor && isTerminal(out) && !hasNoColorEnv(),
+		Color:          toTerminal && !opts.noColor && !hasNoColorEnv(),
 		ShowPassed:     opts.showPassed,
 		NoRemediations: opts.noRemediations,
 		Details:        cmd.Flags().Changed("details"),
 		DetailFilters:  splitFilters(opts.details),
+		MaxResources:   opts.maxResources,
 		ToolVersion:    Version,
 	}
-	if err := report.Write(out, rep, renderOpts); err != nil {
+	if opts.outputFile == "" {
+		renderOpts.Width = console.WidthFor(out)
+	}
+	var rendered bytes.Buffer
+	if err := report.Write(&rendered, rep, renderOpts); err != nil {
+		return err
+	}
+	if opts.outputFile != "" {
+		// 0600 and atomic, like the snapshot: the report is the same map of
+		// the controller's weak points, rendered.
+		if err := writePrivate(opts.outputFile, rendered.Bytes()); err != nil {
+			return err
+		}
+	} else if _, err := out.Write(rendered.Bytes()); err != nil {
 		return err
 	}
 
 	return exitStatus(rep, opts)
+}
+
+// resolveFormat folds the deprecated --format into -o/--output, saying so.
+func resolveFormat(cmd *cobra.Command, opts *scanOptions) error {
+	if !cmd.Flags().Changed("format") {
+		return nil
+	}
+	if cmd.Flags().Changed("output") && !strings.EqualFold(opts.legacyFormat, opts.format) {
+		return fmt.Errorf("--format is the old name of -o/--output, and the two disagree (%q, %q); give -o alone", opts.legacyFormat, opts.format)
+	}
+	opts.format = opts.legacyFormat
+	stderr := cmd.ErrOrStderr()
+	console.Writer{W: stderr, P: console.Painter{Enabled: !opts.noColor && !hasNoColorEnv() && isTerminal(stderr)}}.
+		Line(console.Warn, "--format is deprecated and will be removed; use -o %s", opts.format)
+	return nil
 }
 
 // splitFilters turns --details=a,b into its parts, dropping the blanks a
@@ -209,29 +333,31 @@ func validFormat(f string) bool {
 	return false
 }
 
-func loadScanConfig(opts *scanOptions) (config.Config, error) {
+// loadScanConfig reads the config file given or discovered, and returns its
+// path ("" when there was none).
+func loadScanConfig(opts *scanOptions) (config.Config, string, error) {
 	path := opts.configPath
 	if path == "" {
 		discovered, err := config.Discover()
 		if err != nil {
-			return config.Config{}, err
+			return config.Config{}, "", err
 		}
 		path = discovered
 	}
 	cfg, err := config.LoadWithOverrides(path, opts.sets)
 	if err != nil {
-		return config.Config{}, err
+		return config.Config{}, path, err
 	}
 	// Validated at startup rather than at verdict time: a threshold that
 	// silently inverts a control should stop the run, not change what a report
 	// means without saying so.
 	if err := cfg.Validate(); err != nil {
-		return config.Config{}, err
+		return config.Config{}, path, err
 	}
-	return cfg, nil
+	return cfg, path, nil
 }
 
-func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (*ci.Snapshot, error) {
+func obtainSnapshot(ctx context.Context, stderr io.Writer, colour bool, opts *scanOptions, cfg config.Config, trace *tracer, progress *progressWriter) (*ci.Snapshot, error) {
 	if opts.snapshotIn != "" {
 		return readSnapshot(opts.snapshotIn)
 	}
@@ -253,26 +379,41 @@ func obtainSnapshot(ctx context.Context, opts *scanOptions, cfg config.Config) (
 
 	// Warnings go to stderr as they happen, not only into the snapshot —
 	// "your token cannot read this" said only inside a JSON field reads as a
-	// broken tool. stderr, so a piped report stays clean.
-	warn := StderrWriter()
+	// broken tool. stderr, so a piped report stays clean. They arrive from the
+	// fetch goroutines, so one lock covers each whole line, and the progress
+	// line steps aside for them.
+	warn := console.Writer{W: stderr, P: console.Painter{Enabled: colour}}
+	var warnMu sync.Mutex
 	client, err := jenkins.NewClient(jenkins.Options{
 		BaseURL:        baseURL,
 		Username:       username,
 		Token:          token,
 		Timeout:        cfg.Scan.Timeout.Get(),
 		MaxRetries:     2,
+		Concurrency:    cfg.Scan.Concurrency,
+		CAFile:         cfg.Scan.CAFile,
 		Insecure:       cfg.Scan.Insecure,
 		AllowPlaintext: cfg.Scan.AllowPlaintext,
 		Warnf: func(format string, args ...any) {
-			warn.Line(console.Warn, format, args...)
+			warnMu.Lock()
+			defer warnMu.Unlock()
+			progress.interrupt(func() { warn.Line(console.Warn, format, args...) })
+		},
+		OnRequest: func(e jenkins.RequestEvent) {
+			trace.record(e)
+			progress.tick()
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	progress.start()
 	fetcher := jenkins.NewFetcher(client)
 	fetcher.ToolVersion = Version
+	fetcher.Progress = progress.jobsRead
+	fetcher.Folders = opts.folders
+	fetcher.Jobs = opts.jobs
 	if cfg.Scan.Concurrency > 0 {
 		fetcher.Concurrency = cfg.Scan.Concurrency
 	}
@@ -304,8 +445,11 @@ func readSnapshot(path string) (*ci.Snapshot, error) {
 		// reason about, and reading it anyway would produce verdicts about
 		// fields that have moved. Strict equality, so a file that merely
 		// parses as JSON — with no schemaVersion at all — is refused rather
-		// than evaluated into a page of MANUALs and a clean exit.
-		return nil, fmt.Errorf("snapshot %s has schemaVersion %q; this build reads %q",
+		// than evaluated into a page of MANUALs and a clean exit. The refusal
+		// carries the whole recovery, since there is no report to fall back on.
+		return nil, fmt.Errorf("snapshot %s has schemaVersion %q, but this build reads %q.\n"+
+			"Capture it again with this build: the older shape lacks what the current controls decide on, "+
+			"and evaluating it anyway would report verdicts its data cannot support",
 			path, snapshot.SchemaVersion, ci.SchemaVersion)
 	}
 	if snapshot.Metadata.Platform == "" {
@@ -314,7 +458,7 @@ func readSnapshot(path string) (*ci.Snapshot, error) {
 	return &snapshot, nil
 }
 
-// writeSnapshot writes the snapshot with 0600 permissions.
+// writeSnapshot writes the snapshot with 0600 permissions, atomically.
 //
 // It holds no secrets by construction — see internal/ci — but it is a complete
 // map of a controller's weak points, and that is worth keeping to the user who
@@ -324,11 +468,7 @@ func writeSnapshot(path string, snapshot *ci.Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode snapshot: %w", err)
 	}
-	body = append(body, '\n')
-	if err := os.WriteFile(path, body, 0o600); err != nil {
-		return fmt.Errorf("write snapshot %s: %w", path, err)
-	}
-	return nil
+	return writePrivate(path, append(body, '\n'))
 }
 
 func firstNonEmpty(values ...string) string {
@@ -358,6 +498,36 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		}
 	}
 
+	// Part of the job tree could not be listed, so the jobs in it are absent
+	// from the report rather than judged. A warning alone is what v0.1 did,
+	// and the folder nobody could read then scored 100/100 by omission.
+	// Checked before the empty job list below: when the top level itself
+	// failed, the job list is empty too, and the listing is the cause to name.
+	if !rep.Coverage.Complete && !opts.scan.AllowIncomplete {
+		return &exitCodeError{code: ExitError, msg: incompleteSummary(rep.Coverage)}
+	}
+
+	// Nothing job-scope was audited, so no verdict below is about the jobs.
+	// The case this exists for is a token without Job/Read: the controller
+	// does not refuse it the job list, it hands it an empty one, and the
+	// controller-scope controls then pass on their own. Exit 2 rather than 1:
+	// the scan did not find a problem, it failed to look.
+	if rep.Coverage.NoJobsAudited() {
+		if rep.Coverage.SkippedDisabled > 0 {
+			return &exitCodeError{
+				code: ExitError,
+				msg: fmt.Sprintf("no job was evaluated: all %s were disabled, and skipDisabledJobs left them out\n"+
+					"set skipDisabledJobs back to false to report them as NA, or narrow the run to controller-scope controls with include",
+					console.Pluralize(rep.Coverage.SkippedDisabled, "job")),
+			}
+		}
+		return &exitCodeError{
+			code: ExitError,
+			msg: "no job was evaluated: the controller listed none that this token can read, so nothing job-scope was audited\n" +
+				"a token without Job/Read is shown an empty job list rather than an error; grant it Job/Read (and Job/ExtendedRead to judge them)",
+		}
+	}
+
 	if opts.scan.MaxManual >= 0 {
 		// Only automated controls count against the gate. The bundle ships
 		// controls that are MANUAL by design (automated: false, no API can
@@ -367,7 +537,9 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 		// be a lie. What the gate measures is what the token failed to read.
 		unread := 0
 		for _, f := range rep.Findings {
-			if f.Status == engine.StatusManual && f.Automated {
+			// An accepted MANUAL finding is one somebody has reviewed by hand
+			// and recorded as such; it is no longer a gap in what was seen.
+			if f.Status == engine.StatusManual && f.Automated && f.Waiver == nil {
 				unread++
 			}
 		}
@@ -401,6 +573,32 @@ func exitStatus(rep *engine.Report, opts *scanOptions) error {
 	return nil
 }
 
+// incompleteSummary names what the scan could not list, and both ways on.
+func incompleteSummary(c engine.Coverage) string {
+	if len(c.Unlisted) == 0 {
+		// A snapshot from before the job list's completeness was recorded,
+		// or one somebody edited.
+		return "the snapshot does not record its job list as complete, so jobs may be missing from this report\n" +
+			"capture it again with this build, or set scan.allowIncomplete: true to accept it as it is"
+	}
+	names := make([]string, len(c.Unlisted))
+	for i, n := range c.Unlisted {
+		if n == "/" {
+			names[i] = "the top level"
+			continue
+		}
+		names[i] = fmt.Sprintf("%q", n)
+	}
+	const shown = 5
+	list := strings.Join(names, ", ")
+	if len(names) > shown {
+		list = strings.Join(names[:shown], ", ") + fmt.Sprintf(" and %d more", len(names)-shown)
+	}
+	return fmt.Sprintf("the job list is incomplete: %s could not be listed (%s), so the jobs in them were not evaluated\n"+
+		"the report covers everything else; grant the token Job/Read there, or set scan.allowIncomplete: true to accept a partial scan",
+		console.Pluralize(len(c.Unlisted), "container"), list)
+}
+
 // failureSummary counts controls, not findings: one misconfiguration across
 // 200 jobs is 200 findings, and "200 controls failed" cannot be true of a
 // bundle that holds 15.
@@ -411,7 +609,9 @@ func failureSummary(rep *engine.Report, threshold string) string {
 	controls := map[string]bool{}
 	resources := map[string]bool{}
 	for _, f := range rep.Findings {
-		if f.Status != engine.StatusFail {
+		// Accepted failures do not fail the run, so they are not what this
+		// line explains.
+		if f.Status != engine.StatusFail || f.Waiver != nil {
 			continue
 		}
 		if !severityAtOrAbove(f.Severity, threshold) {

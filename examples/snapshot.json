@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
   "metadata": {
     "tool": "jenkins-bench",
     "toolVersion": "0.1.0",
@@ -7,7 +7,7 @@
     "baseUrl": "https://jenkins.example.com",
     "generatedAt": "2026-08-14T09:00:00Z",
     "warnings": [
-      "this token cannot read the plugin list, which needs Overall/Administer; plugin checks will report MANUAL"
+      "this token cannot read the plugin list, which needs Overall/SystemRead or Overall/Administer; plugin checks will report MANUAL"
     ]
   },
   "controller": {
@@ -23,7 +23,10 @@
     "builtInNode": {
       "numExecutors": 2,
       "numExecutorsKnown": true,
-      "labels": ["built-in"]
+      "labels": ["built-in"],
+      "labelsKnown": true,
+      "mode": "NORMAL",
+      "modeKnown": true
     },
     "agents": [
       {
@@ -67,10 +70,11 @@
       "agents": true,
       "credentials": true,
       "plugins": false,
-      "updateSite": true
+      "updateSite": true,
+      "jobs": true
     },
     "errors": [
-      "the plugin list could not be read (GET /pluginManager/api/json?depth=1: HTTP 403 Forbidden); Overall/Administer is required"
+      "the plugin list could not be read (GET /pluginManager/api/json?tree=plugins[shortName,version,enabled,active,hasUpdate]: HTTP 403 Forbidden); it needs Overall/SystemRead, which Overall/Administer implies"
     ]
   },
   "jobs": [
@@ -85,6 +89,7 @@
       "buildable": true,
       "definition": {
         "source": "scm",
+        "class": "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition",
         "scriptPath": "Jenkinsfile",
         "scmUrls": ["https://git.example.com/platform/api-service.git"],
         "sandbox": false,
@@ -93,6 +98,7 @@
       "triggers": [{ "type": "SCMTrigger", "spec": "H/15 * * * *" }],
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": true,
       "runsOnBuiltInNode": false,
       "runsOnBuiltInNodeKnown": false,
       "available": { "api": true, "config": true }
@@ -108,12 +114,14 @@
       "buildable": true,
       "definition": {
         "source": "inline",
+        "class": "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition",
         "sandbox": false,
         "sandboxKnown": true
       },
       "triggers": [{ "type": "TimerTrigger", "spec": "H 2 * * *" }],
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": true,
       "runsOnBuiltInNode": false,
       "runsOnBuiltInNodeKnown": false,
       "available": { "api": true, "config": true }
@@ -129,12 +137,15 @@
       "buildable": true,
       "definition": {
         "source": "scm",
+        "class": "org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory",
+        "scriptPath": "Jenkinsfile",
         "scmUrls": ["https://git.example.com/platform/mobile-app.git"],
         "sandbox": false,
         "sandboxKnown": false
       },
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": false,
       "runsOnBuiltInNode": false,
       "runsOnBuiltInNodeKnown": false,
       "available": { "api": true, "config": true }
@@ -152,6 +163,8 @@
       "triggers": [{ "type": "TimerTrigger", "spec": "H 3 * * *" }],
       "remoteTriggerToken": true,
       "remoteTriggerTokenKnown": true,
+      "unauthenticatedTriggers": ["authToken"],
+      "triggersKnown": true,
       "runsOnBuiltInNode": true,
       "runsOnBuiltInNodeKnown": true,
       "available": { "api": true, "config": true }
@@ -187,6 +200,7 @@
       "definition": { "source": "ui", "sandbox": false, "sandboxKnown": false },
       "remoteTriggerToken": false,
       "remoteTriggerTokenKnown": true,
+      "triggersKnown": true,
       "runsOnBuiltInNode": true,
       "runsOnBuiltInNodeKnown": true,
       "available": { "api": true, "config": true }

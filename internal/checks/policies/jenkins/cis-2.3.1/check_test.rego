@@ -84,3 +84,29 @@ test_na_for_a_disabled_job if {
 	r.status == "NA"
 	contains(r.details, "Re-enabling")
 }
+
+# The audit's third blocker: inline-pipeline's factory gives every branch one
+# script stored on the controller. v0.1 called every multibranch project "scm".
+test_fails_for_a_multibranch_project_whose_factory_supplies_the_script if {
+	r := cis_2_3_1.result with input as testdata.job_input({
+		"kind": "multibranch",
+		"class": "org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject",
+		"definition": {
+			"source": "inline",
+			"class": "org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory",
+			"sandbox": false, "sandboxKnown": true,
+		},
+	})
+	r.status == "FAIL"
+	contains(r.details, "branch factory")
+	r.evidence[1] == "branch factory org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory"
+}
+
+# The unknown message names the class that was not recognised — the
+# definition's or the factory's — not the job's, which is WorkflowJob for every
+# pipeline whatever defines it.
+test_manual_names_the_unrecognised_definition_class if {
+	r := cis_2_3_1.result with input as testdata.job_input({"definition": {"source": "unknown", "class": "com.example.SomeOtherDefinition"}})
+	r.status == "MANUAL"
+	contains(r.details, "com.example.SomeOtherDefinition")
+}

@@ -1,15 +1,19 @@
 package jenkins
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/scm-bench/jenkins-bench/internal/ci"
@@ -38,9 +42,19 @@ const (
 	AvailUpdateSite  = "updateSite"
 	AvailCredentials = "credentials"
 
+	// AvailJobs is true when every container in the job tree was listed. It
+	// lives on the controller because what it qualifies is the job list as a
+	// whole: a folder that could not be listed takes its jobs out of the scan
+	// without leaving a job behind to carry the error.
+	AvailJobs = "jobs"
+
 	AvailJobAPI    = "api"
 	AvailJobConfig = "config"
 )
+
+// rootContainer names the top level in Controller.Unlisted. A job's full name
+// never starts with a slash, so it cannot collide with a folder.
+const rootContainer = "/"
 
 // Fetcher captures a snapshot of one controller.
 type Fetcher struct {
@@ -50,9 +64,24 @@ type Fetcher struct {
 	Concurrency int
 	// ToolVersion is recorded in the snapshot metadata.
 	ToolVersion string
+	// Progress, when set, is told after each job is read how many of how
+	// many are done. Called from the fetch goroutines.
+	Progress func(done, total int)
+	// Folders and Jobs narrow the scan to the items named, by full name;
+	// both empty means the whole controller. They add up: a folder brings
+	// every job under it at any depth, a job brings itself. A name the
+	// controller does not know is an error, never an empty scan.
+	Folders []string
+	Jobs    []string
 
 	mu       sync.Mutex
 	warnings []string
+	// unlisted collects the containers whose listing failed, for
+	// Controller.Unlisted.
+	unlisted []string
+	// listed is every container walked, so overlapping --folder targets are
+	// listed once.
+	listed map[string]bool
 }
 
 // NewFetcher returns a fetcher reading through c.
@@ -87,12 +116,14 @@ func (f *Fetcher) Fetch(ctx context.Context) (*ci.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap.Controller = *controller
 
 	jobs, err := f.fetchJobs(ctx, controller)
 	if err != nil {
 		return nil, err
 	}
+	// After the jobs, not before: listing them is what decides whether the
+	// job list is complete, and that is recorded on the controller.
+	snap.Controller = *controller
 	snap.Jobs = jobs
 
 	f.mu.Lock()
@@ -104,15 +135,17 @@ func (f *Fetcher) Fetch(ctx context.Context) (*ci.Snapshot, error) {
 func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 	c := &ci.Controller{Available: map[string]bool{}}
 
-	// The version arrives as a response header on any page, including one that
-	// needs no credentials, so it is knowable even when everything else is not.
-	if headers, err := f.client.Head(ctx, "/login"); err == nil {
+	var inst instance
+	headers, err := f.client.GetJSONHeaders(ctx, "/api/json?tree="+instanceTree, &inst)
+	c.Available[AvailRoot] = err == nil
+	// The version arrives as a response header on every response, a refusal
+	// included, so it is knowable even when nothing else is. It used to come
+	// from a GET of /login made first, with credentials attached — the page an
+	// SSO realm redirects, and the request most likely to meet an https to
+	// http bounce. One request fewer, and that one gone.
+	if headers != nil {
 		c.Version = headers.Get("X-Jenkins")
 	}
-
-	var inst instance
-	err := f.client.GetJSON(ctx, "/api/json", &inst)
-	c.Available[AvailRoot] = err == nil
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return nil, ctx.Err()
@@ -148,13 +181,23 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 		if inst.NumExecutors != nil {
 			c.BuiltInNode.NumExecutors, c.BuiltInNode.NumExecutorsKnown = *inst.NumExecutors, true
 		}
+		if inst.Mode != nil && *inst.Mode != "" {
+			c.BuiltInNode.Mode, c.BuiltInNode.ModeKnown = *inst.Mode, true
+		}
+		if inst.AssignedLabels != nil {
+			for _, l := range *inst.AssignedLabels {
+				addLabel(&c.BuiltInNode, l.Name)
+			}
+			c.BuiltInNode.LabelsKnown = true
+		}
 	}
 
 	// Measured, not read. See ProbeAnonymous.
-	allowed, conclusive := f.client.ProbeAnonymous(ctx, "/api/json")
-	c.Security.AnonymousRead, c.Security.AnonymousReadKnown = allowed, conclusive
-	if !conclusive {
-		c.Errors = append(c.Errors, "the unauthenticated probe did not reach a conclusion")
+	probe := f.client.ProbeAnonymous(ctx, "/api/json?tree=useSecurity")
+	c.Security.AnonymousRead, c.Security.AnonymousReadKnown = probe.Allowed, probe.Conclusive
+	if !probe.Conclusive {
+		c.Errors = append(c.Errors, "the unauthenticated probe did not reach a conclusion: "+probe.Reason)
+		f.warn("whether anonymous users can read the controller is unknown: %s", probe.Reason)
 	}
 
 	f.fetchNodes(ctx, c)
@@ -166,7 +209,7 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 
 func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 	var nodes computers
-	if err := f.client.GetJSON(ctx, "/computer/api/json?depth=1", &nodes); err != nil {
+	if err := f.client.GetJSON(ctx, "/computer/api/json?tree="+computerTree, &nodes); err != nil {
 		c.Available[AvailAgents] = false
 		c.Errors = append(c.Errors, fmt.Sprintf("the node list could not be read (%v)", err))
 		return
@@ -181,8 +224,9 @@ func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 				c.BuiltInNode.NumExecutors, c.BuiltInNode.NumExecutorsKnown = *n.NumExecutors, true
 			}
 			for _, l := range n.AssignedLabels {
-				c.BuiltInNode.Labels = append(c.BuiltInNode.Labels, l.Name)
+				addLabel(&c.BuiltInNode, l.Name)
 			}
+			c.BuiltInNode.LabelsKnown = true
 			continue
 		}
 		agent := ci.Agent{
@@ -202,11 +246,11 @@ func (f *Fetcher) fetchNodes(ctx context.Context, c *ci.Controller) {
 
 func (f *Fetcher) fetchPlugins(ctx context.Context, c *ci.Controller) {
 	var pm pluginManager
-	if err := f.client.GetJSON(ctx, "/pluginManager/api/json?depth=1", &pm); err != nil {
+	if err := f.client.GetJSON(ctx, "/pluginManager/api/json?tree="+pluginTree, &pm); err != nil {
 		c.Available[AvailPlugins] = false
-		c.Errors = append(c.Errors, fmt.Sprintf("the plugin list could not be read (%v); Overall/Administer is required", err))
+		c.Errors = append(c.Errors, fmt.Sprintf("the plugin list could not be read (%v); it needs Overall/SystemRead, which Overall/Administer implies", err))
 		if IsForbidden(err) {
-			f.warn("this token cannot read the plugin list, which needs Overall/Administer; plugin checks will report MANUAL")
+			f.warn("this token cannot read the plugin list, which needs Overall/SystemRead or Overall/Administer; plugin checks will report MANUAL")
 		}
 		return
 	}
@@ -225,23 +269,28 @@ func (f *Fetcher) fetchPlugins(ctx context.Context, c *ci.Controller) {
 
 func (f *Fetcher) fetchUpdateSite(ctx context.Context, c *ci.Controller) {
 	var site updateSite
-	if err := f.client.GetJSON(ctx, "/updateCenter/site/default/api/json", &site); err != nil {
+	if err := f.client.GetJSON(ctx, "/updateCenter/site/default/api/json?tree=url,dataTimestamp", &site); err != nil {
 		c.Available[AvailUpdateSite] = false
 		c.Errors = append(c.Errors, fmt.Sprintf("the update site could not be read (%v)", err))
 		return
 	}
 	c.Available[AvailUpdateSite] = true
-	c.UpdateSite.URL = site.URL
+	c.UpdateSite.URL = stripCredentials(site.URL)
 	if site.DataTimestamp != nil && *site.DataTimestamp > 0 {
 		c.UpdateSite.DataTimestamp = time.UnixMilli(*site.DataTimestamp).UTC()
 		c.UpdateSite.DataTimestampKnown = true
 	}
 }
 
-// fetchCredentials reads credential metadata. Availability cannot come from
-// the HTTP status: an unauthorised read returns 200 with {"stores":{}}. It is
-// earned instead — a store came back, or the plugin list read succeeded, which
-// needs Overall/Administer and so proves any existing store would have shown.
+// fetchCredentials reads credential metadata from the controller's own stores.
+// Folder stores are not read.
+//
+// Availability cannot come from the HTTP status: an unauthorised read returns
+// 200 with {"stores":{}}. It is earned from the body instead — at least one
+// store came back, and every domain in it carried its credentials list. v0.1
+// also took a readable plugin list as proof, on the belief that it needs
+// Overall/Administer; it needs only Overall/SystemRead, and an account holding
+// that was shown {"stores":{}} by a 2.580.1 controller with two credentials.
 func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 	var root credentialsRoot
 	if err := f.client.GetJSON(ctx, "/credentials/api/json?depth=3", &root); err != nil {
@@ -250,6 +299,7 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 		return
 	}
 
+	complete := true
 	storeNames := make([]string, 0, len(root.Stores))
 	for name := range root.Stores {
 		storeNames = append(storeNames, name)
@@ -264,7 +314,18 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 		}
 		sort.Strings(domainNames)
 		for _, domainName := range domainNames {
-			for _, cred := range store.Domains[domainName].Credentials {
+			listed := store.Domains[domainName].Credentials
+			if listed == nil {
+				complete = false
+				continue
+			}
+			for _, cred := range *listed {
+				if cred.ID == "" {
+					// depth=2's failure mode: the right number of
+					// elements, every one of them empty.
+					complete = false
+					continue
+				}
 				c.Credentials = append(c.Credentials, ci.Credential{
 					ID:          cred.ID,
 					Type:        cred.TypeName,
@@ -276,11 +337,13 @@ func (f *Fetcher) fetchCredentials(ctx context.Context, c *ci.Controller) {
 		}
 	}
 
-	sawAStore := len(root.Stores) > 0
-	c.Available[AvailCredentials] = sawAStore || c.Available[AvailPlugins]
-	if !c.Available[AvailCredentials] {
+	c.Available[AvailCredentials] = len(root.Stores) > 0 && complete
+	switch {
+	case len(root.Stores) == 0:
 		c.Errors = append(c.Errors, "no credential store was visible to this token, which is indistinguishable from a controller that has none")
 		f.warn("credential stores were not visible to this token; credential checks will report MANUAL")
+	case !complete:
+		c.Errors = append(c.Errors, "a credential store came back without its credentials listed, so the set read is not the whole of it")
 	}
 }
 
@@ -298,21 +361,66 @@ func jobPath(fullName string) string {
 	return b.String()
 }
 
+// maxFolderDepth is how deep the walk follows folders. Jenkins puts no limit
+// on nesting, and no controller in use comes near this; a tree that does is
+// something answering on the controller's behalf.
+const maxFolderDepth = 64
+
 // listJobs walks folders recursively. A nested tree= expression truncates at
 // whatever depth it was written for, silently losing deeper folders.
-func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) error {
+//
+// container is the folder's full name, "" for the top level; depth is how many
+// folders deep it is.
+func (f *Fetcher) listJobs(ctx context.Context, container string, depth int, out *[]item) error {
+	if f.listed[container] {
+		return nil
+	}
+	if f.listed == nil {
+		f.listed = map[string]bool{}
+	}
+	f.listed[container] = true
 	var listing jobListing
-	path := prefix + "/api/json?tree=jobs[fullName,name,url,_class]"
+	prefix := ""
+	if container != "" {
+		prefix = jobPath(container)
+	}
+	path := prefix + "/api/json?tree=" + listingTree
 	if err := f.client.GetJSON(ctx, path, &listing); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		f.warn("the job list under %q could not be read (%v); jobs there are missing from this scan", displayPrefix(prefix), err)
+		// Not fatal — the rest of the tree is still worth auditing — but not
+		// a footnote either. The jobs in here are not failing or passing,
+		// they are absent, and a scan that cannot say how many is
+		// incomplete: Controller.Unlisted carries the name to the exit code.
+		// A token Jenkins filters the folder's contents for gets a 200 with
+		// fewer jobs, not an error, and lands nowhere near here.
+		f.unlist(container, "the job list of %s could not be read (%v); the jobs in it are missing from this scan", describeContainer(container), err)
 		return nil
 	}
+
+	// Jenkins lists an item only inside the folder that holds it, so its
+	// full name is the folder's plus one segment. A listing that breaks that
+	// is not this folder's — a proxy answering every URL with the same page
+	// made the walk recurse until the deadline, 35,933 requests in two
+	// seconds against the audit's stand-in — and none of it is trusted.
 	for _, it := range listing.Jobs {
-		if isContainer(it.Class) {
-			if err := f.listJobs(ctx, jobPath(it.FullName), out); err != nil {
+		if !childOf(container, it.FullName) {
+			f.unlist(container, "the job list of %s holds %q, which is not inside it, so it is not that folder's list — "+
+				"something other than the controller may be answering; the jobs in it are missing from this scan",
+				describeContainer(container), it.FullName)
+			return nil
+		}
+	}
+
+	for _, it := range listing.Jobs {
+		if isContainer(it) {
+			if depth+1 > maxFolderDepth {
+				f.unlist(it.FullName, "%s is nested more than %d folders deep, past which the walk stops; the jobs in it are missing from this scan",
+					describeContainer(it.FullName), maxFolderDepth)
+				continue
+			}
+			if err := f.listJobs(ctx, it.FullName, depth+1, out); err != nil {
 				return err
 			}
 			continue
@@ -324,18 +432,50 @@ func (f *Fetcher) listJobs(ctx context.Context, prefix string, out *[]item) erro
 	return nil
 }
 
-func displayPrefix(prefix string) string {
-	if prefix == "" {
-		return "/"
+// childOf reports whether fullName is an item directly inside container.
+func childOf(container, fullName string) bool {
+	if fullName == "" {
+		return false
 	}
-	return prefix
+	rest := fullName
+	if container != "" {
+		var ok bool
+		if rest, ok = strings.CutPrefix(fullName, container+"/"); !ok {
+			return false
+		}
+	}
+	return rest != "" && !strings.Contains(rest, "/")
+}
+
+// unlist records a container whose jobs the scan could not list, and warns.
+func (f *Fetcher) unlist(container, format string, args ...any) {
+	name := container
+	if name == "" {
+		name = rootContainer
+	}
+	f.mu.Lock()
+	f.unlisted = append(f.unlisted, name)
+	f.mu.Unlock()
+	f.warn(format, args...)
+}
+
+// describeContainer names a container in a sentence.
+func describeContainer(container string) string {
+	if container == "" {
+		return "the top level"
+	}
+	return fmt.Sprintf("folder %q", container)
 }
 
 func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]ci.Job, error) {
-	var items []item
-	if err := f.listJobs(ctx, "", &items); err != nil {
+	items, err := f.enumerate(ctx)
+	if err != nil {
 		return nil, err
 	}
+	f.mu.Lock()
+	controller.Unlisted = append([]string(nil), f.unlisted...)
+	f.mu.Unlock()
+	controller.Available[AvailJobs] = len(controller.Unlisted) == 0
 
 	builtInLabels := builtInNodeLabels(controller)
 	jobs := make([]ci.Job, len(items))
@@ -348,6 +488,7 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 	var wg sync.WaitGroup
 	var firstErr error
 	var errOnce sync.Once
+	var done atomic.Int64
 
 	for i, it := range items {
 		wg.Add(1)
@@ -361,6 +502,9 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 				return
 			}
 			jobs[i] = job
+			if f.Progress != nil {
+				f.Progress(int(done.Add(1)), len(items))
+			}
 		}(i, it)
 	}
 	wg.Wait()
@@ -370,6 +514,86 @@ func (f *Fetcher) fetchJobs(ctx context.Context, controller *ci.Controller) ([]c
 
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].FullName < jobs[j].FullName })
 	return jobs, nil
+}
+
+// addLabel records one of the built-in node's labels once, whichever of the
+// two endpoints that carry them reported it.
+func addLabel(n *ci.BuiltInNode, name string) {
+	for _, existing := range n.Labels {
+		if existing == name {
+			return
+		}
+	}
+	n.Labels = append(n.Labels, name)
+}
+
+// enumerate finds the jobs in scope: the whole tree, or what --folder and
+// --job name.
+func (f *Fetcher) enumerate(ctx context.Context) ([]item, error) {
+	var items []item
+	if len(f.Folders) == 0 && len(f.Jobs) == 0 {
+		err := f.listJobs(ctx, "", 0, &items)
+		return items, err
+	}
+	for _, raw := range f.Folders {
+		name := strings.Trim(strings.TrimSpace(raw), "/")
+		target, err := f.lookup(ctx, "--folder", name)
+		if err != nil {
+			return nil, err
+		}
+		if !isContainer(target) {
+			return nil, fmt.Errorf("--folder %q names a job, not a folder; name it with --job", name)
+		}
+		if err := f.listJobs(ctx, name, strings.Count(name, "/")+1, &items); err != nil {
+			return nil, err
+		}
+	}
+	for _, raw := range f.Jobs {
+		name := strings.Trim(strings.TrimSpace(raw), "/")
+		target, err := f.lookup(ctx, "--job", name)
+		if err != nil {
+			return nil, err
+		}
+		if isContainer(target) {
+			return nil, fmt.Errorf("--job %q names a folder, not a job; name it with --folder", name)
+		}
+		items = append(items, target)
+	}
+	// A job named twice — once under a --folder, once by --job — is one job.
+	seen := map[string]bool{}
+	unique := items[:0]
+	for _, it := range items {
+		if !seen[it.FullName] {
+			seen[it.FullName] = true
+			unique = append(unique, it)
+		}
+	}
+	return unique, nil
+}
+
+// lookup reads the one item a scoping flag names. Jenkins answers 404 both
+// for an item that does not exist and for one this token may not see, and
+// either way the scan the flag asked for cannot happen: it is an error naming
+// the target, never a scan of nothing that exits 0.
+func (f *Fetcher) lookup(ctx context.Context, flag, name string) (item, error) {
+	if name == "" {
+		return item{}, fmt.Errorf("%s needs a full name, e.g. %s platform/api-service", flag, flag)
+	}
+	var it item
+	err := f.client.GetJSON(ctx, jobPath(name)+"/api/json?tree="+itemTree, &it)
+	switch {
+	case err == nil:
+		if it.FullName == "" {
+			it.FullName = name
+		}
+		return it, nil
+	case ctx.Err() != nil:
+		return item{}, ctx.Err()
+	case Status(err) == http.StatusNotFound:
+		return item{}, fmt.Errorf("%s %q: the controller has no such item, or this token cannot see it", flag, name)
+	default:
+		return item{}, fmt.Errorf("%s %q could not be read: %w", flag, name, err)
+	}
 }
 
 // builtInNodeLabels is every label that means "the controller": the well-known
@@ -389,25 +613,22 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 		FullName:  it.FullName,
 		Name:      segs[len(segs)-1],
 		Folder:    strings.Join(segs[:len(segs)-1], "/"),
-		URL:       it.URL,
+		URL:       stripCredentials(it.URL),
 		Class:     it.Class,
 		Kind:      kindOf(it.Class),
 		Available: map[string]bool{},
 	}
 	path := jobPath(it.FullName)
 
-	var detail jobDetail
-	if err := f.client.GetJSON(ctx, path+"/api/json", &detail); err != nil {
-		if ctx.Err() != nil {
-			return job, ctx.Err()
-		}
-		job.Available[AvailJobAPI] = false
-		job.Errors = append(job.Errors, fmt.Sprintf("the job API could not be read (%v)", err))
-	} else {
-		job.Available[AvailJobAPI] = true
-		job.Disabled = detail.Disabled
-		job.Buildable = detail.Buildable
-	}
+	// What a Job/Read token can see of a job — whether it is disabled, and
+	// buildable — came from the listing that found it. It used to cost a
+	// request per job of its own, to /job/<path>/api/json with no tree=,
+	// which renders up to a hundred builds, the health report and every
+	// last*Build for each job: on a large controller, the bulk of a scan's
+	// load for two booleans.
+	job.Available[AvailJobAPI] = true
+	job.Disabled = it.Disabled
+	job.Buildable = it.Buildable
 
 	body, err := f.client.GetRaw(ctx, path+"/config.xml")
 	if err != nil {
@@ -425,71 +646,210 @@ func (f *Fetcher) fetchJob(ctx context.Context, it item, controller *ci.Controll
 		job.Errors = append(job.Errors, fmt.Sprintf("the job configuration could not be parsed (%v)", err))
 		return job, nil
 	}
+	// A proxy's sign-in or error page, served at the config.xml URL with a
+	// 200, can be well-formed XHTML. v0.1 parsed one as a job whose root
+	// happened to be <html> — available, no token in it, CIS-2.3.5 PASS.
+	root := cfg.XMLName.Local
+	if strings.EqualFold(root, "html") || cfg.XMLName.Space == "http://www.w3.org/1999/xhtml" {
+		job.Available[AvailJobConfig] = false
+		job.Errors = append(job.Errors, "the configuration request was answered with an HTML page, not a job configuration — "+
+			"most likely a sign-in or error page from something in front of the controller")
+		return job, nil
+	}
 	job.Available[AvailJobConfig] = true
-	f.applyConfig(&job, cfg, controller, builtInLabels)
+	doc, known := jobDocuments[root]
+	if known {
+		scripts, err := findScripts(body)
+		if err != nil {
+			// The document decoded a moment ago, so this does not happen;
+			// if it ever does, the scripts are unknown, not absent.
+			job.Available[AvailJobConfig] = false
+			job.Errors = append(job.Errors, fmt.Sprintf("the job configuration could not be scanned for scripts (%v)", err))
+			return job, nil
+		}
+		job.Scripts = scripts
+	}
+	if !known {
+		// A job type nobody taught this fetcher: what defines it, what
+		// triggers it and where it runs could be anywhere in the document,
+		// so none of it is taken as known, and the controls say so.
+		if cfg.Disabled == "true" {
+			job.Disabled = true
+		}
+		job.Definition = ci.Definition{Source: ci.SourceUnknown, Class: root}
+		return job, nil
+	}
+	f.applyConfig(&job, cfg, doc, controller, builtInLabels)
 	return job, nil
 }
 
 // xmlDeclaration matches a leading XML declaration and captures its version.
 var xmlDeclaration = regexp.MustCompile(`^(\s*<\?xml\s[^?]*?version\s*=\s*['"])([0-9.]+)(['"])`)
 
-// decodeJobConfig parses a job's config.xml, rewriting the XML 1.1 declaration
-// Jenkins emits on every save to 1.0: Go's encoding/xml rejects 1.1 outright,
-// which made every saved job unreadable. Only the version is touched — a
-// document with 1.1-only content still fails, as a recorded parse error.
+// controlCharRef matches a numeric character reference, decimal or hex.
+var controlCharRef = regexp.MustCompile(`&#(x[0-9a-fA-F]+|[0-9]+);`)
+
+// utf8BOM is the byte-order mark some editors and proxies put in front.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// decodeJobConfig parses a job's config.xml.
+//
+// Go's encoding/xml reads XML 1.0, and Jenkins writes 1.1 whenever it saves a
+// job, so three things are smoothed over first — each of which used to turn a
+// readable job into a MANUAL one:
+//
+//   - the 1.1 declaration is rewritten to 1.0, after a byte-order mark is
+//     dropped (one in front hid the declaration from the rewrite);
+//   - character references to C0 control characters, legal in 1.1 and how
+//     XStream writes an ANSI escape in a description, become U+FFFD — no
+//     field this fetcher reads can hold one meaningfully;
+//   - an ISO-8859-1 or US-ASCII declaration is decoded rather than refused.
+//
+// Anything else 1.1 permits and 1.0 does not still fails, as a recorded parse
+// error rather than a guess.
 func decodeJobConfig(body []byte) (*jobConfig, error) {
-	body = xmlDeclaration.ReplaceAll(body, []byte(`${1}1.0${3}`))
 	var cfg jobConfig
-	if err := xml.Unmarshal(body, &cfg); err != nil {
+	if err := newConfigDecoder(prepareConfigXML(body)).Decode(&cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
+// prepareConfigXML smooths a config.xml over for encoding/xml; see
+// decodeJobConfig.
+func prepareConfigXML(body []byte) []byte {
+	body = bytes.TrimPrefix(body, utf8BOM)
+	body = xmlDeclaration.ReplaceAll(body, []byte(`${1}1.0${3}`))
+	return controlCharRef.ReplaceAllFunc(body, func(ref []byte) []byte {
+		digits := string(ref[2 : len(ref)-1])
+		base := 10
+		if digits[0] == 'x' {
+			digits, base = digits[1:], 16
+		}
+		n, err := strconv.ParseUint(digits, base, 32)
+		if err != nil || n == 0 || n > 0x1F || n == '\t' || n == '\n' || n == '\r' {
+			return ref
+		}
+		return []byte("&#xFFFD;")
+	})
+}
+
+// newConfigDecoder reads a prepared config.xml.
+func newConfigDecoder(body []byte) *xml.Decoder {
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder.CharsetReader = charsetReader
+	return decoder
+}
+
+// charsetReader decodes the single-byte encodings a config.xml declaration
+// has been seen to name. Every byte of ISO-8859-1 is the code point of the
+// same number, so the conversion is a loop; US-ASCII is its subset.
+func charsetReader(charset string, input io.Reader) (io.Reader, error) {
+	switch strings.ToLower(charset) {
+	case "utf-8", "utf8":
+		return input, nil
+	case "iso-8859-1", "iso8859-1", "latin1", "latin-1", "us-ascii", "ascii":
+		raw, err := io.ReadAll(input)
+		if err != nil {
+			return nil, err
+		}
+		var b strings.Builder
+		b.Grow(len(raw))
+		for _, c := range raw {
+			b.WriteRune(rune(c))
+		}
+		return strings.NewReader(b.String()), nil
+	}
+	return nil, fmt.Errorf("the configuration declares encoding %q, which this scan does not decode", charset)
+}
+
 // applyConfig extracts booleans, counts and class names — nothing else. The
 // document holds the trigger token in cleartext, and snapshots are written to
 // disk and passed around.
-func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, controller *ci.Controller, builtInLabels map[string]bool) {
+func (f *Fetcher) applyConfig(job *ci.Job, cfg *jobConfig, doc jobDocument, controller *ci.Controller, builtInLabels map[string]bool) {
 	if cfg.Disabled == "true" {
 		job.Disabled = true
 	}
 
 	// Presence only.
 	job.RemoteTriggerToken = cfg.AuthToken != nil && strings.TrimSpace(*cfg.AuthToken) != ""
-	job.RemoteTriggerTokenKnown = true
+	job.RemoteTriggerTokenKnown = doc.project
 
-	job.Definition = definitionFrom(job.Kind, cfg)
+	job.Definition = definitionFrom(doc, cfg)
 	job.Triggers = triggersFrom(cfg)
+
+	var classes []string
+	for _, entries := range [][]configTrigger{cfg.Triggers.Entries, cfg.PipelineTriggers.Entries} {
+		for _, t := range entries {
+			classes = append(classes, t.XMLName.Local)
+		}
+	}
+	assessed := assessTriggers(job.RemoteTriggerToken, classes)
+	job.UnauthenticatedTriggers = assessed.unauthenticated
+	job.UnrecognizedTriggers = assessed.unrecognized
+	// A multibranch project's own <triggers> are its re-scan schedule. What
+	// starts its builds is declared in each branch's Jenkinsfile and lands in
+	// the generated branch jobs, which the scan does not descend into — so
+	// the answer is unknown, whatever the project itself says.
+	job.TriggersKnown = doc.project
 
 	// Where a job runs. A pipeline picks its agent in the Jenkinsfile, which
 	// the controller does not parse into anything readable, so the answer is
-	// unknown rather than false.
-	if job.Kind == ci.KindPipeline || job.Kind == ci.KindMultibranch {
+	// unknown rather than false; only the project types say it here.
+	if !doc.ui {
 		job.RunsOnBuiltInNodeKnown = false
 		return
 	}
-	if !controller.BuiltInNode.NumExecutorsKnown {
-		job.RunsOnBuiltInNodeKnown = false
-		return
-	}
+	job.RunsOnBuiltInNode, job.RunsOnBuiltInNodeKnown = placeJob(cfg, controller.BuiltInNode, builtInLabels)
+}
+
+// placeJob answers whether a project-type job can run on the built-in node,
+// by Jenkins' own rules — AbstractProject.getAssignedLabel and the node's
+// mode — and reports known=false wherever the data to apply them is missing.
+func placeJob(cfg *jobConfig, node ci.BuiltInNode, builtInLabels map[string]bool) (runs, known bool) {
 	assigned := strings.TrimSpace(cfg.AssignedNode)
+	canRoam := strings.TrimSpace(cfg.CanRoam)
 	switch {
-	case assigned != "" && isLabelExpression(assigned):
+	case canRoam == "true":
+		// No label restriction: the job runs wherever there is an executor.
+		// The built-in node takes it only with executors to offer, and only
+		// in NORMAL mode — EXCLUSIVE takes nothing that does not name it.
+		if !node.NumExecutorsKnown {
+			return false, false
+		}
+		if node.NumExecutors == 0 {
+			return false, true
+		}
+		if !node.ModeKnown {
+			return false, false
+		}
+		return !strings.EqualFold(node.Mode, "EXCLUSIVE"), true
+	case canRoam == "false" && assigned == "":
+		// Jenkins assigns a job that may not roam and names no node to the
+		// controller's own label: it is pinned there. v0.1 read it as running
+		// nowhere near the controller.
+		return true, true
+	case canRoam == "false" && isLabelExpression(assigned):
 		// <assignedNode> can hold a label expression — "built-in || linux",
 		// "!windows && x86" — and this fetcher does not evaluate those.
 		// Recording false for one would assert, as measured fact, that a job
-		// which may well run on the controller cannot; unknown is the honest
-		// answer, and the policy reports MANUAL from it.
-		job.RunsOnBuiltInNodeKnown = false
-		return
-	case assigned != "":
-		job.RunsOnBuiltInNode = builtInLabels[strings.ToLower(assigned)]
+		// which may well run on the controller cannot.
+		return false, false
+	case canRoam == "false":
+		if builtInLabels[strings.ToLower(assigned)] {
+			return true, true
+		}
+		// Not one of the built-in node's labels — if they could be read at
+		// all. Otherwise only the two well-known names can be placed.
+		if !node.LabelsKnown {
+			return false, false
+		}
+		return false, true
 	default:
-		// No label restriction: the job runs wherever there is an executor,
-		// which includes the controller when it has any.
-		job.RunsOnBuiltInNode = cfg.CanRoam == "true" && controller.BuiltInNode.NumExecutors > 0
+		// No <canRoam> in the document at all: not a shape Jenkins writes
+		// for these job types, so nothing is assumed about it.
+		return false, false
 	}
-	job.RunsOnBuiltInNodeKnown = true
 }
 
 // isLabelExpression reports whether an <assignedNode> value is a label
@@ -500,50 +860,84 @@ func isLabelExpression(s string) bool {
 	return strings.ContainsAny(s, "&|!()<>\"' \t")
 }
 
-func definitionFrom(kind string, cfg *jobConfig) ci.Definition {
-	// A multibranch project reads a Jenkinsfile from each branch. That is
-	// pipeline-as-code by construction, whatever its <definition> says.
-	if kind == ci.KindMultibranch {
-		def := ci.Definition{Source: ci.SourceSCM}
-		for _, bs := range cfg.Sources.Data.BranchSources {
-			if bs.Source.Remote != "" {
-				def.SCMURLs = append(def.SCMURLs, bs.Source.Remote)
-			}
-		}
-		return def
-	}
-
-	if cfg.Definition == nil {
-		// No <definition> element and a <project> root: a freestyle or matrix
-		// job, whose build steps are configuration clicked into a form.
-		if cfg.XMLName.Local == "project" || cfg.XMLName.Local == "matrix-project" {
-			return ci.Definition{Source: ci.SourceUI}
-		}
+func definitionFrom(doc jobDocument, cfg *jobConfig) ci.Definition {
+	switch {
+	case cfg.XMLName.Local == classMultibranch:
+		return multibranchDefinition(cfg)
+	case doc.ui:
+		// A freestyle, matrix or Maven job: build steps are configuration
+		// clicked into a form.
+		return ci.Definition{Source: ci.SourceUI}
+	case cfg.Definition == nil:
 		return ci.Definition{Source: ci.SourceUnknown}
 	}
 
-	switch cfg.Definition.Class {
+	d := cfg.Definition
+	switch d.Class {
 	case classCpsScmFlowDefinition:
-		def := ci.Definition{Source: ci.SourceSCM, ScriptPath: cfg.Definition.ScriptPath}
-		for _, rc := range cfg.Definition.SCM.UserRemoteConfigs.Configs {
+		def := ci.Definition{Source: ci.SourceSCM, Class: d.Class, ScriptPath: d.ScriptPath}
+		for _, rc := range d.SCM.UserRemoteConfigs.Configs {
 			if rc.URL != "" {
-				def.SCMURLs = append(def.SCMURLs, rc.URL)
+				def.SCMURLs = append(def.SCMURLs, stripCredentials(rc.URL))
 			}
 		}
 		return def
-	case classCpsFlowDefinition:
-		def := ci.Definition{Source: ci.SourceInline}
-		if cfg.Definition.Sandbox != nil {
-			def.Sandbox = strings.TrimSpace(*cfg.Definition.Sandbox) == "true"
-			def.SandboxKnown = true
-		}
-		return def
+	case classSCMBinder:
+		// A standard multibranch project's branch job: its own branch's
+		// Jenkinsfile.
+		return ci.Definition{Source: ci.SourceSCM, Class: d.Class, ScriptPath: d.ScriptPath}
+	case classCpsFlowDefinition, classInlineFlowDefinition:
+		return withSandbox(ci.Definition{Source: ci.SourceInline, Class: d.Class}, d.Sandbox)
+	case classDefaultsBinder:
+		return withSandbox(ci.Definition{Source: ci.SourceInline, Class: d.Class}, d.UseSandbox)
 	default:
 		// A definition class from a plugin this fetcher has not been taught
 		// about. Distinct from an unreadable configuration, which leaves
 		// available["config"] false and no definition at all.
-		return ci.Definition{Source: ci.SourceUnknown}
+		return ci.Definition{Source: ci.SourceUnknown, Class: d.Class}
 	}
+}
+
+// multibranchDefinition decides what a multibranch project's branches build
+// from, which is its factory's business and not its class's.
+//
+// v0.1 returned "scm" for every multibranch project, on the reasoning that
+// reading a Jenkinsfile per branch is what one does. The factory can say
+// otherwise: inline-pipeline gives every branch one script stored on the
+// controller, sandbox optional, and pipeline-multibranch-defaults one kept in
+// a Config File Provider file. Both scored CIS-2.3.1 PASS and CIS-2.1.2 NA. A
+// factory this fetcher has not been taught is unknown, not assumed to be the
+// default.
+func multibranchDefinition(cfg *jobConfig) ci.Definition {
+	f := cfg.Factory
+	var def ci.Definition
+	switch f.Class {
+	case classWorkflowBranchProjectFactory:
+		def = ci.Definition{Source: ci.SourceSCM, ScriptPath: f.ScriptPath}
+	case classInlineBranchProjectFactory:
+		def = withSandbox(ci.Definition{Source: ci.SourceInline}, f.Sandbox)
+	case classDefaultsBranchProjectFactory:
+		def = withSandbox(ci.Definition{Source: ci.SourceInline}, f.UseSandbox)
+	default:
+		def = ci.Definition{Source: ci.SourceUnknown}
+	}
+	def.Class = f.Class
+	for _, bs := range cfg.Sources.Data.BranchSources {
+		if bs.Source.Remote != "" {
+			def.SCMURLs = append(def.SCMURLs, stripCredentials(bs.Source.Remote))
+		}
+	}
+	return def
+}
+
+// withSandbox records a sandbox flag when the document carried one. Absent is
+// not off: it leaves SandboxKnown false, and the control reports MANUAL.
+func withSandbox(def ci.Definition, flag *string) ci.Definition {
+	if flag != nil {
+		def.Sandbox = strings.TrimSpace(*flag) == "true"
+		def.SandboxKnown = true
+	}
+	return def
 }
 
 // triggersFrom collects trigger types and their schedules from both places a

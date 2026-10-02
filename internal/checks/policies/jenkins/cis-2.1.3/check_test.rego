@@ -38,7 +38,7 @@ test_honours_the_configured_plugin_names if {
 test_manual_when_the_plugin_list_was_unreadable if {
 	r := cis_2_1_3.result with input as testdata.controller_input({"available": testdata.without(testdata.controller_available, "plugins")})
 	r.status == "MANUAL"
-	contains(r.details, "Overall/Administer")
+	contains(r.details, "Overall/SystemRead")
 }
 
 test_produces_a_verdict_for_an_empty_controller if {

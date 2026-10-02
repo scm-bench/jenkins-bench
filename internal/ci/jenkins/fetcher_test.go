@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/scm-bench/jenkins-bench/internal/ci"
 )
@@ -56,7 +58,9 @@ func (s *stand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.paths = append(s.paths, full)
 	s.mu.Unlock()
 
-	if _, _, ok := r.BasicAuth(); !ok && r.URL.Path != "/login" {
+	// A controller stamps its version on every response, refusals included.
+	w.Header().Set("X-Jenkins", "2.541.2")
+	if _, _, ok := r.BasicAuth(); !ok {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -95,8 +99,7 @@ func (s *stand) requested(path string) bool {
 // hardened wires a stand-in returning a well-configured controller.
 func hardened(t *testing.T) *stand {
 	s := newStand(t)
-	s.handlers["/login"] = standResponse{headers: map[string]string{"X-Jenkins": "2.541.2"}}
-	s.handlers["/api/json"] = standResponse{body: `{
+	s.handlers["/api/json"] = standResponse{body: `{"_class":"hudson.model.Hudson",
 		"mode":"NORMAL","numExecutors":0,"useSecurity":true,"useCrumbs":true,"slaveAgentPort":-1,
 		"jobs":[{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"}]}`}
 	s.handlers["/computer/api/json"] = standResponse{body: `{"computer":[
@@ -255,18 +258,48 @@ func TestFetcherRecordsWhatItCouldNotRead(t *testing.T) {
 	}
 }
 
-// An empty credential list is only trustworthy when something proves the token
-// would have been shown a store. Reading /pluginManager needs
-// Overall/Administer, so succeeding at it is that proof.
-func TestFetcherTrustsAnEmptyCredentialListWithAdministratorAccess(t *testing.T) {
+// Reading the plugin list was taken as proof of Overall/Administer, and so of
+// a credential list that had to be complete. It needs only Overall/SystemRead
+// — and an account holding that, on 2.580.1, was shown {"stores":{}} by a
+// controller with two system credentials. An empty store list proves nothing,
+// whatever else the token can read.
+func TestFetcherNeverTrustsAnEmptyStoreList(t *testing.T) {
 	s := hardened(t)
 	s.handlers["/credentials/api/json"] = standResponse{body: `{"stores":{}}`}
 	snap := fetchFrom(t, s)
-	if !snap.Controller.Available[AvailCredentials] {
-		t.Error("with the plugin list readable, an empty store list is genuinely empty")
+	if !snap.Controller.Available[AvailPlugins] {
+		t.Fatal("the stand-in serves the plugin list")
 	}
-	if len(snap.Controller.Credentials) != 0 {
-		t.Error("no credentials should have been recorded")
+	if snap.Controller.Available[AvailCredentials] {
+		t.Error("an empty store list was taken as an empty credential set")
+	}
+}
+
+// What an administrator sees on a controller with no credentials: the system
+// store, present and empty. That is a genuine zero.
+func TestFetcherTrustsAStoreThatIsPresentAndEmpty(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/credentials/api/json"] = standResponse{body: `{"stores":{"system":{"domains":{"_":{"credentials":[]}}}}}`}
+	snap := fetchFrom(t, s)
+	if !snap.Controller.Available[AvailCredentials] || len(snap.Controller.Credentials) != 0 {
+		t.Errorf("available = %v, credentials = %v", snap.Controller.Available[AvailCredentials], snap.Controller.Credentials)
+	}
+}
+
+// Both ways of asking at too low a depth fail silently: the credentials key
+// absent from the domain, or credentials that are all empty objects. Either is
+// an unread list, not an empty one.
+func TestFetcherDoesNotCountCredentialsItCouldNotRead(t *testing.T) {
+	for name, body := range map[string]string{
+		"credentials key absent":   `{"stores":{"system":{"domains":{"_":{"_class":"com.cloudbees.plugins.credentials.CredentialsStoreAction$DomainWrapper"}}}}}`,
+		"empty credential objects": `{"stores":{"system":{"domains":{"_":{"credentials":[{},{}]}}}}}`,
+	} {
+		s := hardened(t)
+		s.handlers["/credentials/api/json"] = standResponse{body: body}
+		snap := fetchFrom(t, s)
+		if snap.Controller.Available[AvailCredentials] {
+			t.Errorf("%s: the credential list was not read, and must not be available", name)
+		}
 	}
 }
 
@@ -344,6 +377,7 @@ func TestFetcherTreatsAMultibranchProjectAsOneJob(t *testing.T) {
 		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"main","fullName":"app/main","url":"http://x/"}]}`}
 	s.handlers["/job/app/config.xml"] = standResponse{body: `<?xml version='1.1'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>
 		<sources><data><jenkins.branch.BranchSource><source><remote>https://example.invalid/r.git</remote></source></jenkins.branch.BranchSource></data></sources>
+		<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory"><scriptPath>Jenkinsfile</scriptPath></factory>
 		</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
 
 	snap := fetchFrom(t, s)
@@ -354,10 +388,9 @@ func TestFetcherTreatsAMultibranchProjectAsOneJob(t *testing.T) {
 	if job.Kind != ci.KindMultibranch {
 		t.Errorf("kind = %q", job.Kind)
 	}
-	// A multibranch project reads a Jenkinsfile from each branch. That is
-	// pipeline-as-code by construction.
-	if job.Definition.Source != ci.SourceSCM {
-		t.Errorf("definition.source = %q, want scm", job.Definition.Source)
+	// The default branch factory reads each branch's own Jenkinsfile.
+	if job.Definition.Source != ci.SourceSCM || job.Definition.ScriptPath != "Jenkinsfile" {
+		t.Errorf("definition = %+v, want scm from Jenkinsfile", job.Definition)
 	}
 	if job.RunsOnBuiltInNodeKnown {
 		t.Error("where a pipeline runs is decided in the Jenkinsfile, which is not readable here")
@@ -641,5 +674,700 @@ func TestFetcherWalksIntoOrganizationFolders(t *testing.T) {
 	}
 	if snap.Jobs[0].Kind != ci.KindMultibranch {
 		t.Errorf("kind = %q, want multibranch", snap.Jobs[0].Kind)
+	}
+}
+
+// A folder that cannot be listed takes its jobs out of the scan. The warning
+// says so; Unlisted and available["jobs"] are what make the scan exit 2 for it.
+func TestFetcherMarksTheJobListIncompleteForAnUnlistableFolder(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"prod","fullName":"prod","url":"http://x/job/prod/"}]}`}
+	s.handlers["/job/prod/api/json"] = standResponse{status: http.StatusInternalServerError, body: `oops`}
+
+	snap := fetchFrom(t, s)
+	if snap.Controller.Available[AvailJobs] {
+		t.Error("a folder that could not be listed leaves the job list incomplete")
+	}
+	if len(snap.Controller.Unlisted) != 1 || snap.Controller.Unlisted[0] != "prod" {
+		t.Errorf("unlisted = %v, want [prod]", snap.Controller.Unlisted)
+	}
+	if len(snap.Jobs) != 1 {
+		t.Errorf("the job outside the folder is still scanned: %+v", snap.Jobs)
+	}
+}
+
+// The top level is a container too, and the one whose loss costs everything.
+func TestFetcherNamesTheTopLevelWhenItCannotBeListed(t *testing.T) {
+	s := hardened(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/json" && strings.Contains(r.URL.RawQuery, "tree=jobs") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		s.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := NewFetcher(client).Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Controller.Unlisted) != 1 || snap.Controller.Unlisted[0] != rootContainer {
+		t.Errorf("unlisted = %v, want the top level", snap.Controller.Unlisted)
+	}
+}
+
+// A complete walk says so explicitly: a missing key would read as incomplete.
+func TestFetcherRecordsACompleteJobList(t *testing.T) {
+	snap := fetchFrom(t, hardened(t))
+	if !snap.Controller.Available[AvailJobs] || len(snap.Controller.Unlisted) != 0 {
+		t.Errorf("available = %v, unlisted = %v", snap.Controller.Available, snap.Controller.Unlisted)
+	}
+}
+
+// triggerJob serves one pipeline whose PipelineTriggersJobProperty holds the
+// given trigger elements.
+func triggerJob(t *testing.T, triggers string) ci.Job {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"p","fullName":"p","url":"http://x/job/p/"}]}`}
+	s.handlers["/job/p/api/json"] = standResponse{body: `{"disabled":false,"buildable":true}`}
+	s.handlers["/job/p/config.xml"] = standResponse{body: `<?xml version='1.1' encoding='UTF-8'?><flow-definition>
+		<properties><org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty><triggers>` + triggers + `
+		</triggers></org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty></properties>
+		<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition>
+		</flow-definition>`}
+	return fetchFrom(t, s).Jobs[0]
+}
+
+// The shape generic-webhook-trigger 2.4.3 writes, read off a 2.580.1
+// controller. Its token starts the build with no Jenkins login, and the
+// snapshot must say so without carrying the token.
+func TestFetcherRecognisesAGenericWebhookTrigger(t *testing.T) {
+	job := triggerJob(t, `<org.jenkinsci.plugins.gwt.GenericTrigger plugin="generic-webhook-trigger@2.4.3">
+		<spec></spec><genericVariables/><token>s3cret-gwt</token><silentResponse>false</silentResponse>
+		</org.jenkinsci.plugins.gwt.GenericTrigger>`)
+	if len(job.UnauthenticatedTriggers) != 1 || job.UnauthenticatedTriggers[0] != "GenericTrigger" {
+		t.Errorf("unauthenticatedTriggers = %v, want [GenericTrigger]", job.UnauthenticatedTriggers)
+	}
+	if !job.TriggersKnown {
+		t.Error("a pipeline's triggers are in its own configuration")
+	}
+	encoded, _ := json.Marshal(job)
+	if strings.Contains(string(encoded), "s3cret-gwt") {
+		t.Error("the snapshot carries the webhook token")
+	}
+}
+
+// Without a token a Generic Webhook Trigger is still a way round Job/Build:
+// anyone who can read the job starts it (measured: a Job/Read-only account
+// did).
+func TestFetcherRecognisesATokenlessGenericWebhookTrigger(t *testing.T) {
+	job := triggerJob(t, `<org.jenkinsci.plugins.gwt.GenericTrigger><spec></spec></org.jenkinsci.plugins.gwt.GenericTrigger>`)
+	if len(job.UnauthenticatedTriggers) != 1 {
+		t.Errorf("unauthenticatedTriggers = %v", job.UnauthenticatedTriggers)
+	}
+}
+
+func TestFetcherAcceptsTriggersThatGoThroughJenkins(t *testing.T) {
+	job := triggerJob(t, `<hudson.triggers.SCMTrigger><spec>H/15 * * * *</spec></hudson.triggers.SCMTrigger>
+		<hudson.triggers.TimerTrigger><spec>H 2 * * *</spec></hudson.triggers.TimerTrigger>
+		<jenkins.triggers.ReverseBuildTrigger><spec></spec><upstreamProjects>a</upstreamProjects></jenkins.triggers.ReverseBuildTrigger>
+		<com.cloudbees.jenkins.GitHubPushTrigger plugin="github@1.40"><spec></spec></com.cloudbees.jenkins.GitHubPushTrigger>`)
+	if len(job.UnauthenticatedTriggers) != 0 || len(job.UnrecognizedTriggers) != 0 {
+		t.Errorf("unauthenticated = %v, unrecognized = %v; all four go through Jenkins", job.UnauthenticatedTriggers, job.UnrecognizedTriggers)
+	}
+	if len(job.Triggers) != 4 {
+		t.Errorf("triggers = %+v", job.Triggers)
+	}
+}
+
+// A trigger class nobody taught the fetcher is neither safe nor unsafe.
+func TestFetcherRecordsTriggersItDoesNotKnow(t *testing.T) {
+	job := triggerJob(t, `<com.example.MysteryTrigger><spec></spec></com.example.MysteryTrigger>`)
+	if len(job.UnrecognizedTriggers) != 1 || job.UnrecognizedTriggers[0] != "com.example.MysteryTrigger" {
+		t.Errorf("unrecognizedTriggers = %v", job.UnrecognizedTriggers)
+	}
+	if len(job.UnauthenticatedTriggers) != 0 {
+		t.Errorf("unauthenticatedTriggers = %v; an unknown class proves nothing", job.UnauthenticatedTriggers)
+	}
+}
+
+// The core token lives in <authToken>, not among the triggers.
+func TestFetcherCountsTheRemoteTriggerTokenAsUnauthenticated(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/job/build/config.xml"] = standResponse{body: `<?xml version='1.1'?><project>
+		<canRoam>true</canRoam><authToken>tok</authToken></project>`}
+	job := fetchFrom(t, s).Jobs[0]
+	if len(job.UnauthenticatedTriggers) != 1 || job.UnauthenticatedTriggers[0] != "authToken" {
+		t.Errorf("unauthenticatedTriggers = %v, want [authToken]", job.UnauthenticatedTriggers)
+	}
+	if !job.TriggersKnown {
+		t.Error("a freestyle job's triggers are in its own configuration")
+	}
+}
+
+// What starts a multibranch project's builds is declared in each branch's
+// Jenkinsfile and lands in the branch jobs, which the fetcher does not read.
+func TestFetcherDoesNotKnowAMultibranchProjectsTriggers(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/"}]}`}
+	s.handlers["/job/mb/api/json"] = standResponse{body: `{"buildable":true}`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<?xml version='1.1'?><org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>
+		<triggers><com.cloudbees.hudson.plugins.folder.computed.PeriodicFolderTrigger><spec>H * * * *</spec><interval>3600000</interval></com.cloudbees.hudson.plugins.folder.computed.PeriodicFolderTrigger></triggers>
+		</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+	job := fetchFrom(t, s).Jobs[0]
+	if job.TriggersKnown {
+		t.Error("a multibranch project's build triggers are in its branch jobs, which were not read")
+	}
+	if len(job.UnrecognizedTriggers) != 0 {
+		t.Errorf("the re-scan schedule is a known trigger: %v", job.UnrecognizedTriggers)
+	}
+}
+
+// multibranchDefinitionFor fetches one multibranch project whose branch jobs
+// come from the given <factory> element.
+func multibranchDefinitionFor(t *testing.T, factory string) ci.Definition {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/"}]}`}
+	s.handlers["/job/mb/api/json"] = standResponse{body: `{"buildable":true}`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<?xml version="1.1" encoding="UTF-8"?>
+<org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject plugin="workflow-multibranch@842.v3a_b_59b_57b_e6e">
+  <triggers/>
+  <disabled>false</disabled>
+  <sources class="jenkins.branch.MultiBranchProject$BranchSourceList" plugin="branch-api@2.1303.v9f3b_95dc329d">
+    <data><jenkins.branch.BranchSource><source class="jenkins.plugins.git.GitSCMSource" plugin="git@5.10.1">
+      <id>seed</id><remote>/var/jenkins_home/seed-repo</remote>
+    </source></jenkins.branch.BranchSource></data>
+  </sources>
+  ` + factory + `
+</org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+	snap := fetchFrom(t, s)
+	encoded, _ := json.Marshal(snap)
+	if strings.Contains(string(encoded), "planted") {
+		t.Errorf("a factory's script reached the snapshot: %s", encoded)
+	}
+	return snap.Jobs[0].Definition
+}
+
+// The three factories a 2.580.1 controller wrote for the e2e fixture, verbatim
+// apart from the script. v0.1 called all of them "scm".
+func TestFetcherDecidesAMultibranchProjectByItsFactory(t *testing.T) {
+	inline := multibranchDefinitionFor(t, `<factory class="org.jenkinsci.plugins.inlinepipeline.InlineDefinitionBranchProjectFactory" plugin="inline-pipeline@1.0.32.vf433f2d57630">
+    <owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+    <script>node { echo &apos;planted&apos; }</script>
+    <sandbox>false</sandbox>
+    <markerFile>Jenkinsfile</markerFile>
+  </factory>`)
+	if inline.Source != ci.SourceInline || inline.Sandbox || !inline.SandboxKnown {
+		t.Errorf("inline-pipeline factory: %+v, want inline with the sandbox known to be off", inline)
+	}
+	if inline.Class != classInlineBranchProjectFactory {
+		t.Errorf("class = %q, want the factory's", inline.Class)
+	}
+
+	defaults := multibranchDefinitionFor(t, `<factory class="org.jenkinsci.plugins.pipeline.multibranch.defaults.PipelineBranchDefaultsProjectFactory" plugin="pipeline-multibranch-defaults@2.1">
+    <owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+    <scriptId>e2e-default-jenkinsfile</scriptId>
+    <useSandbox>true</useSandbox>
+  </factory>`)
+	if defaults.Source != ci.SourceInline || !defaults.Sandbox || !defaults.SandboxKnown {
+		t.Errorf("defaults factory: %+v, want inline with the sandbox known to be on", defaults)
+	}
+
+	standard := multibranchDefinitionFor(t, `<factory class="org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory">
+    <owner class="org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject" reference="../.."/>
+    <scriptPath>ci/Jenkinsfile</scriptPath>
+  </factory>`)
+	if standard.Source != ci.SourceSCM || standard.ScriptPath != "ci/Jenkinsfile" || len(standard.SCMURLs) != 1 {
+		t.Errorf("default factory: %+v, want scm from ci/Jenkinsfile", standard)
+	}
+}
+
+// A factory nobody taught the fetcher is unknown — not assumed to be the
+// default, which is how every multibranch project passed in v0.1. No factory
+// at all is the same answer.
+func TestFetcherLeavesAnUnknownFactoryUnknown(t *testing.T) {
+	if def := multibranchDefinitionFor(t, `<factory class="com.example.RemoteJenkinsfileFactory"/>`); def.Source != ci.SourceUnknown || def.Class != "com.example.RemoteJenkinsfileFactory" {
+		t.Errorf("definition = %+v, want unknown naming the factory", def)
+	}
+	if def := multibranchDefinitionFor(t, ``); def.Source != ci.SourceUnknown {
+		t.Errorf("definition = %+v, want unknown without a factory", def)
+	}
+}
+
+// A branch job scanned on its own carries the definition its factory gave it:
+// SCMBinder for the default, and the inline and defaults plugins' own.
+func TestFetcherReadsBranchJobDefinitions(t *testing.T) {
+	cases := map[string]struct {
+		config  string
+		source  string
+		sandbox bool
+		known   bool
+	}{
+		"scm binder": {`<definition class="org.jenkinsci.plugins.workflow.multibranch.SCMBinder"><scriptPath>Jenkinsfile</scriptPath></definition>`, ci.SourceSCM, false, false},
+		"inline":     {`<definition class="org.jenkinsci.plugins.inlinepipeline.InlineFlowDefinition"><script>x</script><sandbox>false</sandbox></definition>`, ci.SourceInline, false, true},
+		"defaults":   {`<definition class="org.jenkinsci.plugins.pipeline.multibranch.defaults.DefaultsBinder"><scriptId>f</scriptId><useSandbox>true</useSandbox></definition>`, ci.SourceInline, true, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := hardened(t)
+			s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+				{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"b","fullName":"b","url":"http://x/"}]}`}
+			s.handlers["/job/b/api/json"] = standResponse{body: `{"buildable":true}`}
+			s.handlers["/job/b/config.xml"] = standResponse{body: `<?xml version="1.1"?><flow-definition>` + tc.config + `</flow-definition>`}
+			def := fetchFrom(t, s).Jobs[0].Definition
+			if def.Source != tc.source || def.Sandbox != tc.sandbox || def.SandboxKnown != tc.known {
+				t.Errorf("definition = %+v", def)
+			}
+		})
+	}
+}
+
+// An SCM URL can carry a credential — https://deploy:<token>@host/… is how a
+// great many Jenkinsfiles were first wired up — and v0.1 copied remotes into
+// the snapshot verbatim. The README promised a snapshot safe to attach to a
+// bug report. Every URL the snapshot keeps is stripped of userinfo, query and
+// fragment, wherever it came from.
+func TestSnapshotHoldsNoCredentialsFromURLs(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"p","fullName":"p","url":"https://jenkins:urlpass-in-job-url@jenkins.example.com/job/p/"},
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/job/mb/"},
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"scp","fullName":"scp","url":"http://x/job/scp/"}]}`}
+	s.handlers["/job/p/api/json"] = standResponse{body: `{"disabled":false}`}
+	s.handlers["/job/mb/api/json"] = standResponse{body: `{}`}
+	s.handlers["/job/scp/api/json"] = standResponse{body: `{}`}
+	s.handlers["/job/p/config.xml"] = standResponse{body: `<flow-definition><definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition">
+		<scm class="hudson.plugins.git.GitSCM"><userRemoteConfigs><hudson.plugins.git.UserRemoteConfig>
+		<url>https://deploy:ghp_PLANTEDTOKEN1@github.com/acme/app.git?access_token=PLANTEDQUERY#PLANTEDFRAG</url>
+		</hudson.plugins.git.UserRemoteConfig></userRemoteConfigs></scm><scriptPath>Jenkinsfile</scriptPath></definition></flow-definition>`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject><sources><data><jenkins.branch.BranchSource>
+		<source class="jenkins.plugins.git.GitSCMSource"><remote>https://bot:glpat-PLANTEDTOKEN2@gitlab.example.com/a/b.git</remote></source>
+		</jenkins.branch.BranchSource></data></sources></org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject>`}
+	s.handlers["/job/scp/config.xml"] = standResponse{body: `<flow-definition><definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition">
+		<scm class="hudson.plugins.git.GitSCM"><userRemoteConfigs><hudson.plugins.git.UserRemoteConfig>
+		<url>deploy:PLANTEDTOKEN3@git.example.com:acme/app.git</url>
+		</hudson.plugins.git.UserRemoteConfig></userRemoteConfigs></scm></definition></flow-definition>`}
+	s.handlers["/updateCenter/site/default/api/json"] = standResponse{body: `{"url":"https://mirror:PLANTEDTOKEN4@updates.example.com/update-center.json","dataTimestamp":1786650950902}`}
+
+	snap := fetchFrom(t, s)
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"urlpass-in-job-url", "PLANTEDTOKEN1", "PLANTEDQUERY", "PLANTEDFRAG", "PLANTEDTOKEN2", "PLANTEDTOKEN3", "PLANTEDTOKEN4", "deploy:", "bot:"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("the snapshot carries %q", secret)
+		}
+	}
+	// Where the definition comes from is still worth knowing.
+	if !strings.Contains(string(encoded), "https://github.com/acme/app.git") ||
+		!strings.Contains(string(encoded), "https://gitlab.example.com/a/b.git") ||
+		!strings.Contains(string(encoded), "git.example.com:acme/app.git") {
+		t.Errorf("the remotes should survive without their credentials: %s", encoded)
+	}
+}
+
+// The version comes from the instance API's own response — a 403 carries it
+// too — and no longer from an authenticated GET of /login made first: the
+// page an SSO realm redirects, and so the likeliest request to meet an https
+// to http bounce with the token attached.
+func TestFetcherReadsTheVersionWithoutVisitingTheLoginPage(t *testing.T) {
+	s := hardened(t)
+	s.forbidden = []string{"/api/json"}
+	snap := fetchFrom(t, s)
+	if snap.Controller.Version != "2.541.2" {
+		t.Errorf("version = %q, want it read off the refusal", snap.Controller.Version)
+	}
+	if s.requested("/login") {
+		t.Error("the fetcher requested /login")
+	}
+}
+
+// Every API request names its fields. Without tree=, the root API renders a
+// colour per job, a job's API up to a hundred builds and every last*Build, and
+// the node list each label's tiedJobs — on a large controller, the timeouts
+// and the response cap, for nothing any control reads. The credentials
+// endpoint is the one exception: a tree= over its map-valued stores returns
+// no credentials at any depth (docs/jenkins-api-notes.md), so it takes depth=3.
+func TestFetcherAsksOnlyForTheFieldsItReads(t *testing.T) {
+	s := hardened(t)
+	fetchFrom(t, s)
+	for _, p := range s.paths {
+		switch {
+		case strings.HasSuffix(p, "/config.xml"):
+		case p == "/credentials/api/json?depth=3":
+		case strings.Contains(p, "/api/json?tree="):
+		default:
+			t.Errorf("GET %s names no fields", p)
+		}
+	}
+	// A job's own API is no longer requested at all: the listing that found
+	// it already carried disabled and buildable.
+	if s.requested("/job/build/api/json") {
+		t.Error("the per-job API was requested; the listing carries what it was read for")
+	}
+}
+
+// Whether a job is disabled now comes from the listing that found it.
+func TestFetcherTakesDisabledFromTheListing(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/","disabled":true,"buildable":false}]}`}
+	job := fetchFrom(t, s).Jobs[0]
+	if !job.Disabled || job.Buildable || !job.Available[AvailJobAPI] {
+		t.Errorf("job = %+v, want disabled, not buildable, from the listing", job)
+	}
+}
+
+// Folders come in more classes than two. A CloudBees CI team folder — or any
+// folder subclass a plugin defines — was recorded as a job of kind "other",
+// and every job inside it vanished from the scan without a warning. Whether
+// an item holds others is a structural fact the listing can state: an item
+// group exports a jobs array, a job does not.
+func TestFetcherWalksAnyItemThatHoldsJobs(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"_class":"hudson.model.Hudson","useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"com.cloudbees.opscenter.bluesteel.folder.BlueSteelTeamFolder","name":"team","fullName":"team","url":"http://x/job/team/","jobs":[{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob"}]},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"empty","fullName":"empty","url":"http://x/job/empty/","jobs":[]},
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"mb","url":"http://x/job/mb/","jobs":[{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob"}]},
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"}]}`}
+	s.handlers["/job/team/api/json"] = standResponse{body: `{"_class":"com.cloudbees.opscenter.bluesteel.folder.BlueSteelTeamFolder","jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"deploy","fullName":"team/deploy","url":"http://x/job/team/job/deploy/"}]}`}
+	s.handlers["/job/empty/api/json"] = standResponse{body: `{"jobs":[]}`}
+	s.handlers["/job/team/job/deploy/config.xml"] = standResponse{body: `<flow-definition><definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition"><scriptPath>Jenkinsfile</scriptPath></definition></flow-definition>`}
+	s.handlers["/job/mb/config.xml"] = standResponse{body: `<org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject/>`}
+
+	snap := fetchFrom(t, s)
+	var names []string
+	for _, j := range snap.Jobs {
+		names = append(names, j.FullName)
+	}
+	if strings.Join(names, ",") != "build,mb,team/deploy" {
+		t.Errorf("jobs = %v, want the team folder walked, the multibranch project kept whole, and no folder recorded as a job", names)
+	}
+	if !snap.Controller.Available[AvailJobs] {
+		t.Error("every container was listed")
+	}
+}
+
+// configFor fetches one freestyle-classed job whose config.xml is body.
+func configFor(t *testing.T, body string) ci.Job {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/job/build/config.xml"] = standResponse{body: body}
+	return fetchFrom(t, s).Jobs[0]
+}
+
+// A proxy's sign-in interstitial, served at the config.xml URL with a 200, is
+// well-formed XHTML — and parsed as a job configuration whose root happened to
+// be <html>: available, no token found, CIS-2.3.5 PASS in v0.1. Only the root
+// elements Jenkins writes for jobs are read as configurations.
+func TestFetcherDoesNotTakeAnHTMLPageForAConfiguration(t *testing.T) {
+	for _, page := range []string{
+		`<?xml version="1.0"?><html><head><title>Access gateway</title></head><body><p>Please sign in</p></body></html>`,
+		`<?xml version="1.0"?><HTML xmlns="http://www.w3.org/1999/xhtml"><body/></HTML>`,
+	} {
+		job := configFor(t, page)
+		if job.Available[AvailJobConfig] {
+			t.Errorf("an HTML page was read as a configuration: %+v", job)
+		}
+		if len(job.Errors) == 0 || !strings.Contains(job.Errors[0], "HTML") {
+			t.Errorf("the job should say what came back instead: %v", job.Errors)
+		}
+	}
+}
+
+// A configuration for a job type the fetcher does not know is read, and
+// nothing in it is taken as known: not its definition, not its triggers, not
+// where it runs.
+func TestFetcherKnowsNothingAboutAJobTypeItDoesNotKnow(t *testing.T) {
+	job := configFor(t, `<?xml version='1.1'?><com.example.ExoticProject><triggers/><disabled>false</disabled></com.example.ExoticProject>`)
+	if !job.Available[AvailJobConfig] {
+		t.Fatalf("a configuration was served and read: %v", job.Errors)
+	}
+	if job.Definition.Source != ci.SourceUnknown || job.Definition.Class != "com.example.ExoticProject" {
+		t.Errorf("definition = %+v, want unknown naming the document", job.Definition)
+	}
+	if job.TriggersKnown || job.RemoteTriggerTokenKnown || job.RunsOnBuiltInNodeKnown {
+		t.Errorf("nothing about an unknown job type is known: %+v", job)
+	}
+}
+
+// A Maven job's build steps are form fields like a freestyle job's, under a
+// root element of its own — the shape maven-plugin 3.27 writes on 2.580.1.
+// v0.1 reported it MANUAL.
+func TestFetcherReadsAMavenJob(t *testing.T) {
+	job := configFor(t, `<?xml version="1.1" encoding="UTF-8"?>
+<maven2-moduleset plugin="maven-plugin@3.27">
+  <properties/><scm class="hudson.scm.NullSCM"/><canRoam>true</canRoam><disabled>false</disabled>
+  <triggers/><goals>clean verify</goals>
+</maven2-moduleset>`)
+	if job.Definition.Source != ci.SourceUI || !job.TriggersKnown {
+		t.Errorf("job = %+v, want ui with its triggers known", job)
+	}
+}
+
+// A proxy that answers every folder URL with the root listing made the walk
+// recurse until the deadline: the audit counted 35,933 listing requests in two
+// seconds against a stand-in. Jenkins never lists an item outside the folder
+// that holds it, so a listing that does is not the folder's, and the walk
+// stops there — and says the job list is incomplete.
+func TestFetcherStopsAtAListingThatIsNotTheFolders(t *testing.T) {
+	var listings atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "tree=jobs") {
+			listings.Add(1)
+			fmt.Fprint(w, `{"jobs":[{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"a","fullName":"a","jobs":[]}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"_class":"hudson.model.Hudson","useSecurity":true,"useCrumbs":true,"numExecutors":0}`)
+	}))
+	defer srv.Close()
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snap, err := NewFetcher(c).Fetch(ctx)
+	if err != nil {
+		t.Fatalf("Fetch: %v (after %d listings)", err, listings.Load())
+	}
+	if n := listings.Load(); n > 3 {
+		t.Errorf("%d listing requests; a listing that repeats its parent's must stop the walk", n)
+	}
+	if snap.Controller.Available[AvailJobs] || len(snap.Controller.Unlisted) != 1 || snap.Controller.Unlisted[0] != "a" {
+		t.Errorf("available = %v, unlisted = %v; folder a was not truly listed", snap.Controller.Available, snap.Controller.Unlisted)
+	}
+}
+
+// Names that grow without repeating keep the invariant and still never end;
+// no real controller nests folders this deep.
+func TestFetcherStopsAtAnImplausibleDepth(t *testing.T) {
+	var listings atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "tree=jobs") {
+			listings.Add(1)
+			parent := strings.TrimSuffix(strings.TrimPrefix(strings.ReplaceAll(r.URL.Path, "/job/", "/"), "/"), "/api/json")
+			child := "f"
+			if parent != "" && parent != "api/json" {
+				child = parent + "/f"
+			}
+			fmt.Fprintf(w, `{"jobs":[{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"f","fullName":%q,"jobs":[]}]}`, child)
+			return
+		}
+		fmt.Fprint(w, `{"_class":"hudson.model.Hudson","useSecurity":true,"useCrumbs":true,"numExecutors":0}`)
+	}))
+	defer srv.Close()
+	c, _ := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	snap, err := NewFetcher(c).Fetch(ctx)
+	if err != nil {
+		t.Fatalf("Fetch: %v (after %d listings)", err, listings.Load())
+	}
+	if n := listings.Load(); n > int64(maxFolderDepth)+2 {
+		t.Errorf("%d listing requests; the walk should stop at depth %d", n, maxFolderDepth)
+	}
+	if snap.Controller.Available[AvailJobs] {
+		t.Error("a walk cut short is an incomplete job list")
+	}
+}
+
+// Three things a controller can serve that the decoder refused, each turning
+// a readable job into a MANUAL one: a byte-order mark before the XML 1.1
+// declaration (which hid the declaration from the 1.1-to-1.0 rewrite), an
+// ISO-8859-1 declaration, and XML 1.1's character references to control
+// characters — what XStream writes for an ANSI escape in a description.
+func TestDecodeJobConfigReadsWhatJenkinsWrites(t *testing.T) {
+	cases := map[string]string{
+		"byte-order mark":  "\xef\xbb\xbf<?xml version='1.1' encoding='UTF-8'?><project><authToken>t</authToken></project>",
+		"ISO-8859-1":       "<?xml version='1.1' encoding='ISO-8859-1'?><project><description>caf\xe9</description><authToken>t</authToken></project>",
+		"control char ref": "<?xml version='1.1' encoding='UTF-8'?><project><description>&#x1b;[31mred&#27;&#x7;</description><authToken>t</authToken></project>",
+	}
+	for name, body := range cases {
+		cfg, err := decodeJobConfig([]byte(body))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if cfg.XMLName.Local != "project" || cfg.AuthToken == nil {
+			t.Errorf("%s: decoded %+v", name, cfg)
+		}
+	}
+	// A declaration in an encoding nobody decodes is still an error, recorded
+	// on the job, rather than a guess.
+	if _, err := decodeJobConfig([]byte(`<?xml version='1.0' encoding='EBCDIC-CP-US'?><project/>`)); err == nil {
+		t.Error("an encoding the decoder cannot read must be an error")
+	}
+}
+
+// placement fetches the hardened freestyle job with the given config.xml body
+// and root API, and returns where the fetcher says it runs.
+func placement(t *testing.T, root, config string, computerStatus int) (runs, known bool) {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: root}
+	if computerStatus != 0 {
+		s.handlers["/computer/api/json"] = standResponse{status: computerStatus, body: `oops`}
+	}
+	s.handlers["/job/build/config.xml"] = standResponse{body: config}
+	job := fetchFrom(t, s).Jobs[0]
+	return job.RunsOnBuiltInNode, job.RunsOnBuiltInNodeKnown
+}
+
+const twoExecutors = `{"_class":"hudson.model.Hudson","mode":"NORMAL","numExecutors":2,"useSecurity":true,"useCrumbs":true,
+	"assignedLabels":[{"name":"built-in"}],"jobs":[{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/"}]}`
+
+// AbstractProject.getAssignedLabel: a job that may not roam and names no node
+// is assigned the controller's own label. v0.1 recorded it as not running on
+// the controller.
+func TestRunsOnBuiltInNodeWhenPinnedWithoutANode(t *testing.T) {
+	runs, known := placement(t, twoExecutors, `<project><canRoam>false</canRoam></project>`, 0)
+	if !runs || !known {
+		t.Errorf("runs=%v known=%v; canRoam=false with no assignedNode is the built-in node", runs, known)
+	}
+}
+
+// A built-in node in EXCLUSIVE mode takes only jobs whose label names it, so a
+// roaming job does not run there whatever its executor count.
+func TestRunsOnBuiltInNodeHonoursExclusiveMode(t *testing.T) {
+	exclusive := strings.Replace(twoExecutors, `"mode":"NORMAL"`, `"mode":"EXCLUSIVE"`, 1)
+	if runs, known := placement(t, exclusive, `<project><canRoam>true</canRoam></project>`, 0); runs || !known {
+		t.Errorf("runs=%v known=%v; a roaming job does not run on an EXCLUSIVE built-in node", runs, known)
+	}
+	if runs, known := placement(t, twoExecutors, `<project><canRoam>true</canRoam></project>`, 0); !runs || !known {
+		t.Errorf("runs=%v known=%v; a roaming job runs on a NORMAL built-in node with executors", runs, known)
+	}
+	noMode := strings.Replace(twoExecutors, `"mode":"NORMAL",`, ``, 1)
+	if _, known := placement(t, noMode, `<project><canRoam>true</canRoam></project>`, 0); known {
+		t.Error("with the mode unread, a roaming job's placement is unknown")
+	}
+}
+
+// The built-in node's labels come from the node list or the instance API.
+// With neither, a job pinned to a custom label cannot be placed: v0.1 decided
+// "not the controller" against the two well-known names alone.
+func TestRunsOnBuiltInNodeNeedsTheNodesLabels(t *testing.T) {
+	unlabelled := strings.Replace(twoExecutors, `"assignedLabels":[{"name":"built-in"}],`, ``, 1)
+	pinned := `<project><canRoam>false</canRoam><assignedNode>controller-pool</assignedNode></project>`
+	if _, known := placement(t, unlabelled, pinned, http.StatusInternalServerError); known {
+		t.Error("with no label list read, a custom label cannot be placed")
+	}
+	// The instance API alone is enough: it carries the built-in node's labels.
+	if runs, known := placement(t, twoExecutors, pinned, http.StatusInternalServerError); runs || !known {
+		t.Errorf("runs=%v known=%v; the instance API listed the built-in node's labels", runs, known)
+	}
+	// The well-known names need no lookup.
+	if runs, known := placement(t, unlabelled, `<project><canRoam>false</canRoam><assignedNode>built-in</assignedNode></project>`, http.StatusInternalServerError); !runs || !known {
+		t.Errorf("runs=%v known=%v; built-in is the controller", runs, known)
+	}
+}
+
+// scopedStand is a controller with a top-level job, a folder holding a job and
+// a subfolder, and a multibranch project.
+func scopedStand(t *testing.T) *stand {
+	t.Helper()
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{body: `{"_class":"hudson.model.Hudson","useSecurity":true,"numExecutors":0,"jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"build","fullName":"build","url":"http://x/job/build/"},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"Team A","fullName":"Team A","url":"http://x/","jobs":[{}]}]}`}
+	folder := `{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"Team A","fullName":"Team A","jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"deploy","fullName":"Team A/deploy","url":"http://x/"},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"sub","fullName":"Team A/sub","url":"http://x/","jobs":[{}]},
+		{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"Team A/mb","url":"http://x/","jobs":[{}]}]}`
+	s.handlers["/job/Team A/api/json"] = standResponse{body: folder}
+	s.handlers["/job/Team A/job/sub/api/json"] = standResponse{body: `{"_class":"com.cloudbees.hudson.plugins.folder.Folder","name":"sub","fullName":"Team A/sub","jobs":[
+		{"_class":"hudson.model.FreeStyleProject","name":"deep","fullName":"Team A/sub/deep","url":"http://x/"}]}`}
+	s.handlers["/job/Team A/job/deploy/api/json"] = standResponse{body: `{"_class":"hudson.model.FreeStyleProject","name":"deploy","fullName":"Team A/deploy","url":"http://x/"}`}
+	s.handlers["/job/Team A/job/mb/api/json"] = standResponse{body: `{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","name":"mb","fullName":"Team A/mb","jobs":[{}]}`}
+	s.handlers["/job/Team A/job/sub/job/deep/api/json"] = standResponse{body: `{"_class":"hudson.model.FreeStyleProject","name":"deep","fullName":"Team A/sub/deep","url":"http://x/"}`}
+	return s
+}
+
+func scopedFetch(t *testing.T, s *stand, folders, jobs []string) (*ci.Snapshot, error) {
+	t.Helper()
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewFetcher(client)
+	f.Folders, f.Jobs = folders, jobs
+	return f.Fetch(context.Background())
+}
+
+func jobNames(snap *ci.Snapshot) string {
+	var names []string
+	for _, j := range snap.Jobs {
+		names = append(names, j.FullName)
+	}
+	return strings.Join(names, ",")
+}
+
+// --folder brings everything under the folder, at any depth, and nothing
+// else; --job brings one job; together they add up, each job once.
+func TestFetcherNarrowsToTheFoldersAndJobsNamed(t *testing.T) {
+	snap, err := scopedFetch(t, scopedStand(t), []string{"Team A"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jobNames(snap); got != "Team A/deploy,Team A/mb,Team A/sub/deep" {
+		t.Errorf("--folder 'Team A' = %s", got)
+	}
+	if !snap.Controller.Available[AvailJobs] {
+		t.Error("everything in scope was listed")
+	}
+
+	snap, err = scopedFetch(t, scopedStand(t), []string{"Team A/sub", "/Team A/sub/"}, []string{"build", "Team A/sub/deep", "Team A/mb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jobNames(snap); got != "Team A/mb,Team A/sub/deep,build" {
+		t.Errorf("folders and jobs together = %s, want each job once", got)
+	}
+}
+
+// A name the controller does not know is an error naming it — the scan the
+// flag asked for cannot happen, and an empty report would read as a clean one.
+func TestFetcherRefusesATargetItCannotFind(t *testing.T) {
+	cases := []struct {
+		folders, jobs []string
+		want          string
+	}{
+		{[]string{"no-such"}, nil, `--folder "no-such": the controller has no such item`},
+		{nil, []string{"Team A/no-such"}, `--job "Team A/no-such": the controller has no such item`},
+		{[]string{"build"}, nil, `--folder "build" names a job`},
+		{nil, []string{"Team A"}, `--job "Team A" names a folder`},
+		{[]string{" / "}, nil, `--folder needs a full name`},
+	}
+	for _, tc := range cases {
+		_, err := scopedFetch(t, scopedStand(t), tc.folders, tc.jobs)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("folders=%v jobs=%v: error = %v, want %q", tc.folders, tc.jobs, err, tc.want)
+		}
+	}
+}
+
+// A multibranch project is a job to the scan, and can be named as one.
+func TestFetcherTakesAMultibranchProjectAsAJob(t *testing.T) {
+	snap, err := scopedFetch(t, scopedStand(t), nil, []string{"Team A/mb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jobNames(snap); got != "Team A/mb" {
+		t.Errorf("--job 'Team A/mb' = %s", got)
+	}
+	if _, err := scopedFetch(t, scopedStand(t), []string{"Team A/mb"}, nil); err == nil {
+		t.Error("--folder on a multibranch project should say to use --job")
 	}
 }
