@@ -85,6 +85,12 @@ func NewClient(opts Options) (*Client, error) {
 	}
 	u, err := url.Parse(strings.TrimRight(opts.BaseURL, "/"))
 	if err != nil {
+		// url.Error repeats the URL it could not parse, credentials and all;
+		// only its reason is kept.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return nil, fmt.Errorf("parse controller URL %s: %w", redactURL(opts.BaseURL), err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
@@ -318,10 +324,20 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 	// assigning it to URL.Path (the decoded form) double-encodes it —
 	// "Team%20A" goes out as "Team%2520A", the controller answers 404, and a
 	// whole folder silently vanishes from the scan.
-	endpointStr := strings.TrimRight(c.baseURL.String(), "/") + path
-	endpoint, err := url.Parse(endpointStr)
+	//
+	// Built once; each attempt sends a clone carrying its attempt number.
+	endpoint := strings.TrimRight(c.baseURL.String(), "/") + path
+	base, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build request for %s: %w", path, err)
+	}
+	base.Header.Set("Accept", "application/json, text/xml, */*")
+	client := c.probeClient
+	if authenticate {
+		client = c.httpClient
+		if c.username != "" {
+			base.SetBasicAuth(c.username, c.token)
+		}
 	}
 
 	var lastErr error
@@ -338,19 +354,7 @@ func (c *Client) raw(ctx context.Context, path string, authenticate bool) ([]byt
 		}
 		waited = false
 
-		req, err := http.NewRequestWithContext(context.WithValue(ctx, attemptKey{}, attempt), http.MethodGet, endpoint.String(), nil)
-		if err != nil {
-			return nil, nil, fmt.Errorf("build request for %s: %w", path, err)
-		}
-		req.Header.Set("Accept", "application/json, text/xml, */*")
-		client := c.probeClient
-		if authenticate {
-			client = c.httpClient
-			if c.username != "" {
-				req.SetBasicAuth(c.username, c.token)
-			}
-		}
-
+		req := base.Clone(context.WithValue(ctx, attemptKey{}, attempt))
 		resp, err := client.Do(req)
 		if err != nil {
 			// Transport errors are worth retrying; a cancelled context is not.

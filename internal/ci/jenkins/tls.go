@@ -19,12 +19,16 @@ func tlsInsecureConfig() *tls.Config {
 // than not checked at all. Read and parsed here, at startup: a bundle that is
 // missing or holds no certificate is a configuration error to report before
 // the first request, not a handshake failure to puzzle over after it.
+// systemCertPool is x509.SystemCertPool; a variable so a test can stand in a
+// machine that has none.
+var systemCertPool = x509.SystemCertPool
+
 func tlsWithCAFile(path string) (*tls.Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("scan.caFile: %w", err)
 	}
-	pool, err := x509.SystemCertPool()
+	pool, err := systemCertPool()
 	if err != nil || pool == nil {
 		// Some minimal containers have no enumerable system pool; the bundle
 		// alone is then what is trusted.

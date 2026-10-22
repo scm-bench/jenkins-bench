@@ -288,9 +288,7 @@ func layout(text string, width int) []string {
 			out = append(out, breakLongWord(soft, width)...)
 		}
 	}
-	if len(out) == 0 {
-		return []string{""}
-	}
+	// strings.Split returns at least one element, so out is never empty.
 	return out
 }
 

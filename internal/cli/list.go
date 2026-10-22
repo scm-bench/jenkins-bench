@@ -11,6 +11,10 @@ import (
 	"github.com/scm-bench/jenkins-bench/internal/checks"
 )
 
+// loadChecks is checks.Load; a variable so a test can stand in a bundle that
+// fails to load.
+var loadChecks = checks.Load
+
 func newListChecksCommand() *cobra.Command {
 	var asJSON bool
 
@@ -19,7 +23,7 @@ func newListChecksCommand() *cobra.Command {
 		Short: "List the controls in the policy bundle",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			bundle, err := checks.Load()
+			bundle, err := loadChecks()
 			if err != nil {
 				return err
 			}
