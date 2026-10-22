@@ -158,6 +158,16 @@ func (f *Fetcher) fetchController(ctx context.Context) (*ci.Controller, error) {
 		// instead.
 		return nil, fmt.Errorf("the controller rejected the credentials: %w\n"+
 			"check --username/--token (JENKINS_USER/JENKINS_TOKEN); use an API token, not a password", err)
+	case err != nil && Status(err) == http.StatusNotFound:
+		// Jenkins answers its own root API for anyone it lets in at all, and
+		// refuses everyone else with 401 or 403 — never 404. A 404 here is a
+		// URL that is not the controller's root: most often a context path
+		// left off (https://host when Jenkins serves https://host/jenkins) or
+		// one added that it does not have. Carrying on degraded every request
+		// after it to the same 404 and ended on "grant the token Job/Read",
+		// which sends the reader to fix permissions that are not the problem.
+		return nil, fmt.Errorf("no Jenkins API at this URL: %w\n"+
+			"check --url (JENKINS_URL) is the controller's root, with the context path if Jenkins serves one (e.g. https://host/jenkins)", err)
 	case err != nil && !deniedNotBroken(err):
 		// No answer at all — connection refused, DNS, TLS, a 5xx that survived
 		// the retries, or a response that is not the Jenkins API. A permission

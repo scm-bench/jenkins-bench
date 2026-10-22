@@ -579,6 +579,29 @@ func TestFetchFailsWhenTheCredentialsAreRejected(t *testing.T) {
 	}
 }
 
+// A 404 on the root API is a wrong URL — measured on Jenkins 2.580.1 behind
+// --prefix=/jenkins, scanned as https://host — not a denial: Jenkins refuses
+// its root API with 401 or 403. It must fail naming the URL, not end on advice
+// to grant Job/Read.
+func TestFetchFailsWhenTheURLIsNotTheControllerRoot(t *testing.T) {
+	s := hardened(t)
+	s.handlers["/api/json"] = standResponse{status: http.StatusNotFound, body: `Not Found`}
+
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	client, err := NewClient(Options{BaseURL: srv.URL, Username: "u", Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewFetcher(client).Fetch(context.Background())
+	if err == nil {
+		t.Fatal("a 404 on the root API must fail the scan")
+	}
+	if !strings.Contains(err.Error(), "--url") || !strings.Contains(err.Error(), "context path") {
+		t.Errorf("the error should point at the URL and its context path: %v", err)
+	}
+}
+
 // A 200 that is not the Jenkins API — a login page, a proxy's splash screen —
 // is a wrong URL, not a readable controller.
 func TestFetchFailsWhenTheAnswerIsNotTheAPI(t *testing.T) {
