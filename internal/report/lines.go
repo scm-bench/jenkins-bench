@@ -51,7 +51,7 @@ func writeFindingLines(w io.Writer, rep *engine.Report, p painter, width int, op
 			return f.Status == engine.StatusNA
 		})
 	}
-	unreadSentence := unreadSummary(rep.Findings)
+	unreadSentence, unreadIDs := unreadSummary(rep.Findings)
 
 	if len(fails) == 0 && len(passes) == 0 && len(manuals) == 0 && len(nas) == 0 && len(accepted) == 0 && unreadSentence == "" {
 		blank(w)
@@ -95,7 +95,10 @@ func writeFindingLines(w io.Writer, rep *engine.Report, p painter, width int, op
 		if len(rep.Metadata.Warnings) > 0 {
 			unreadSentence += "; see Scan warnings below."
 		} else {
-			unreadSentence += "."
+			// Nothing in the warnings explains it — the cause is the control's
+			// own, such as an update site never fetched — so the sentence has to
+			// say where the explanation is or it is a dead end.
+			unreadSentence += "; rerun with --details=" + strings.Join(unreadIDs, ",") + " for why."
 		}
 		blank(w)
 		for _, l := range console.Wrap(unreadSentence, width) {
@@ -277,10 +280,13 @@ func controllerFirst(findings []engine.Finding) []engine.Finding {
 }
 
 // unreadSummary folds every unread finding into one clause, or "" when
-// nothing went unread. The cause — a 401, a missing permission — is already a
+// nothing went unread, and names the controls so the reader knows which ones
+// to look up. The cause — a 401, a missing permission — is usually already a
 // scan warning, so the caller points there instead of repeating it per
-// control per resource.
-func unreadSummary(findings []engine.Finding) string {
+// control per resource; when no warning explains it, the caller points at
+// --details for these controls instead.
+func unreadSummary(findings []engine.Finding) (string, []string) {
+	var ids []string
 	controls := map[string]bool{}
 	resources := map[string]bool{}
 	var one string
@@ -288,20 +294,34 @@ func unreadSummary(findings []engine.Finding) string {
 		if !unread(f) {
 			continue
 		}
+		if !controls[f.CheckID] {
+			ids = append(ids, f.CheckID)
+		}
 		controls[f.CheckID] = true
 		resources[f.Resource] = true
 		one = f.Resource
 	}
 	if len(controls) == 0 {
-		return ""
+		return "", nil
 	}
 	where := "on " + one
 	if len(resources) > 1 {
 		where = fmt.Sprintf("across %s", console.Pluralize(len(resources), "resource"))
 	}
-	return fmt.Sprintf("%s could not be read (Unread) %s",
-		console.Pluralize(len(controls), "control"), where)
+	named := ids
+	more := ""
+	if len(named) > maxNamedUnread {
+		more = fmt.Sprintf(" and %d more", len(named)-maxNamedUnread)
+		named = named[:maxNamedUnread]
+	}
+	return fmt.Sprintf("%s could not be read (Unread) %s: %s%s",
+		console.Pluralize(len(controls), "control"), where, strings.Join(named, ", "), more), ids
 }
+
+// maxNamedUnread caps how many unread controls the summary names. A token that
+// can read almost nothing leaves most of the bundle unread, and the warnings
+// say why; the list is for finding the few, not for restating the bundle.
+const maxNamedUnread = 6
 
 // writeHint closes the report body with where the rest lives. It is the
 // discoverability mechanism for --details, so it always prints in the default

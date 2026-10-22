@@ -981,3 +981,33 @@ func TestJUnitFailsAScanThatCouldNotDoItsJob(t *testing.T) {
 		t.Errorf("a snapshot with no completeness record should fail in JUnit:\n%s", raw)
 	}
 }
+
+// The unread sentence names its controls, and when no scan warning explains
+// them it says where the explanation is. Measured on a real controller: an
+// administrator's scan left CIS-2.3.5 (multibranch) and the plugin update
+// control unread with no warning, and the sentence ended in a full stop — a
+// dead end with nothing to look up.
+func TestUnreadSummaryNamesItsControlsAndWhereToLook(t *testing.T) {
+	rep := sample()
+	rep.Findings = append(rep.Findings,
+		finding("JENKINS-PLUGIN-UPDATES", "controller", engine.ResourceController, engine.StatusManual, "MEDIUM"))
+	rep.Score = engine.Compute(rep.Findings)
+
+	var buf bytes.Buffer
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 200}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "2 controls could not be read (Unread) across 2 resources: CIS-2.3.5, JENKINS-PLUGIN-UPDATES; see Scan warnings below.") {
+		t.Errorf("the sentence should name both unread controls:\n%s", out)
+	}
+
+	rep.Metadata.Warnings = nil
+	buf.Reset()
+	if err := Write(&buf, rep, Options{Format: FormatTable, Width: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "rerun with --details=CIS-2.3.5,JENKINS-PLUGIN-UPDATES for why.") {
+		t.Errorf("with no warning to point at, the sentence should point at --details:\n%s", buf.String())
+	}
+}
