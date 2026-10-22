@@ -3,7 +3,10 @@
 # Plugins are pinned to "latest compatible with this LTS" rather than exact
 # versions: the point of the spike is to see what a current, realistically
 # configured controller exposes, and pinning would freeze that picture.
-FROM jenkins/jenkins:lts
+# JENKINS_IMAGE picks the controller release, so hack/e2e can run the same
+# fixture against an older LTS: JENKINS_IMAGE=jenkins/jenkins:2.541.3-jdk21.
+ARG JENKINS_IMAGE=jenkins/jenkins:lts
+FROM ${JENKINS_IMAGE}
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*

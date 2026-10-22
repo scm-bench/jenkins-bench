@@ -483,8 +483,8 @@ to match the platform. `hack/recon/` holds the harness that measured everything
 this tool believes about the Jenkins API, so a claim can be rechecked rather
 than trusted, and [`hack/e2e/`](hack/e2e) boots a controller with every
 control in a known state and checks each verdict, for each kind of token,
-against what the fixture actually is. It has passed on Jenkins 2.580.1 (LTS);
-running it against another version and reporting what differed is the most
+against what the fixture actually is. It has passed on Jenkins 2.580.1 and
+2.541.3 (LTS); running it against another version and reporting what differed is the most
 valuable contribution there is.
 
 ## License
