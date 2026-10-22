@@ -98,3 +98,16 @@ docker rm -f jenkins-bench-recon
 
 `out/` holds API tokens for the instance and every report and snapshot the
 suite wrote; it is gitignored, and worthless once the container is gone.
+
+## Another Jenkins version
+
+`JENKINS_IMAGE` picks the controller release the image is built from, so the
+same fixture and expectations run against an older LTS:
+
+```sh
+JENKINS_IMAGE=jenkins/jenkins:2.541.3-jdk21 IMAGE=jenkins-bench-recon:2.541.3 ./up.sh && ./verify.sh
+```
+
+Plugins install at their latest release, so a core too old for them fails the
+image build rather than the scan: 2.452.4 cannot install the current plugin
+set, and is not covered.

@@ -23,7 +23,7 @@ OUT=out
 ACCOUNTS="admin reader extended sysread nojob"
 
 if [ "${SKIP_BUILD:-}" != "1" ]; then
-  docker build -q -t "$IMAGE" ../recon >/dev/null
+  docker build -q -t "$IMAGE" --build-arg "JENKINS_IMAGE=${JENKINS_IMAGE:-jenkins/jenkins:lts}" ../recon >/dev/null
 fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
