@@ -1,0 +1,22 @@
+internal/report/lines.go
+  s_bdbd7b4dccdcb8::t_71378f1666b2fd 54,98-101,283-284,286-289,297-299,305,311-318,321-324
+  s_bdbd7b4dccdcb8::t_e0ec0b33b1bb80 325
+internal/report/report_test.go
+  s_bdbd7b4dccdcb8::t_446fc3dc61f60f 984-1013
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b564149367a7dc18ea3074764b09fdab762c9e23",
+  "prompts": {},
+  "sessions": {
+    "s_bdbd7b4dccdcb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82fd69da-fa58-4e3d-929c-324f1b03a3ea",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
