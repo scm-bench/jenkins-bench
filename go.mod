@@ -17,7 +17,7 @@ go 1.26.0
 //
 // Raise this when govulncheck reports something new. CI runs it on every
 // change so the reporting is not left to whoever remembers.
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/open-policy-agent/opa v1.21.1
