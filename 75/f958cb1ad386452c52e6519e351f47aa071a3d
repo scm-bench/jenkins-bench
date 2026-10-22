@@ -1,0 +1,19 @@
+go.mod
+  s_bdbd7b4dccdcb8::t_32ad7b332199bf 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75f958cb1ad386452c52e6519e351f47aa071a3d",
+  "prompts": {},
+  "sessions": {
+    "s_bdbd7b4dccdcb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82fd69da-fa58-4e3d-929c-324f1b03a3ea",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xianpeng Shen <xianpeng.shen@gmail.com>"
+    }
+  }
+}
