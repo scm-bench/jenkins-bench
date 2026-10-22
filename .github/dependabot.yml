@@ -7,6 +7,10 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    # A version must be a week old before it is proposed: most hijacked
+    # releases are caught and yanked within days. Security updates skip this.
+    cooldown:
+      default-days: 7
     groups:
       # Patch bumps arrive as one pull request rather than a stream of them.
       go-patch:
@@ -20,9 +24,13 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies, ci]
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 7
