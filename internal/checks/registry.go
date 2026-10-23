@@ -105,10 +105,16 @@ type Bundle struct {
 
 // Load parses the embedded policy bundle and validates every control.
 func Load() (*Bundle, error) {
+	return loadFrom(policiesFS)
+}
+
+// loadFrom does the work of Load against any file system laid out like the
+// embedded one, so a malformed bundle can be tested without shipping one.
+func loadFrom(fsys fs.FS) (*Bundle, error) {
 	bundle := &Bundle{}
 	seen := map[string]string{}
 
-	err := fs.WalkDir(policiesFS, "policies", func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(fsys, "policies", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -123,7 +129,7 @@ func Load() (*Bundle, error) {
 			if strings.HasSuffix(d.Name(), "_test.rego") {
 				return nil
 			}
-			src, readErr := policiesFS.ReadFile(p)
+			src, readErr := fs.ReadFile(fsys, p)
 			if readErr != nil {
 				return fmt.Errorf("read %s: %w", p, readErr)
 			}
@@ -132,7 +138,7 @@ func Load() (*Bundle, error) {
 			if d.Name() != "metadata.json" {
 				return nil
 			}
-			raw, readErr := policiesFS.ReadFile(p)
+			raw, readErr := fs.ReadFile(fsys, p)
 			if readErr != nil {
 				return fmt.Errorf("read %s: %w", p, readErr)
 			}
@@ -159,23 +165,26 @@ func Load() (*Bundle, error) {
 	}
 
 	sort.Slice(bundle.Checks, func(i, j int) bool {
-		a, b := bundle.Checks[i], bundle.Checks[j]
-		// Supplements (no benchmark number) sort after the mapping, ordered
-		// by ID among themselves.
-		switch {
-		case a.CISID == "" && b.CISID == "":
-			return a.ID < b.ID
-		case a.CISID == "":
-			return false
-		case b.CISID == "":
-			return true
-		}
-		return LessCISID(a.CISID, b.CISID)
+		return lessCheck(bundle.Checks[i], bundle.Checks[j])
 	})
 	sort.Slice(bundle.Modules, func(i, j int) bool {
 		return bundle.Modules[i].Path < bundle.Modules[j].Path
 	})
 	return bundle, nil
+}
+
+// lessCheck is the bundle order: benchmark number first, then supplements (no
+// benchmark number) after the mapping, ordered by ID among themselves.
+func lessCheck(a, b Check) bool {
+	switch {
+	case a.CISID == "" && b.CISID == "":
+		return a.ID < b.ID
+	case a.CISID == "":
+		return false
+	case b.CISID == "":
+		return true
+	}
+	return LessCISID(a.CISID, b.CISID)
 }
 
 func (c Check) validate() error {

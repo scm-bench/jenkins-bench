@@ -388,19 +388,22 @@ func tallyResources(findings []engine.Finding) []resourceTally {
 	}
 
 	// Worst first, and stable between two runs that found the same thing.
-	sort.Slice(out, func(a, b int) bool {
-		x, y := out[a], out[b]
-		switch {
-		case x.failed != y.failed:
-			return x.failed > y.failed
-		case x.unread != y.unread:
-			return x.unread > y.unread
-		case x.manual != y.manual:
-			return x.manual > y.manual
-		}
-		return x.name < y.name
-	})
+	sort.Slice(out, func(a, b int) bool { return lessTally(out[a], out[b]) })
 	return out
+}
+
+// lessTally puts the worst resource first: most failures, then most unread,
+// then most manual, then by name so two runs agree.
+func lessTally(x, y resourceTally) bool {
+	switch {
+	case x.failed != y.failed:
+		return x.failed > y.failed
+	case x.unread != y.unread:
+		return x.unread > y.unread
+	case x.manual != y.manual:
+		return x.manual > y.manual
+	}
+	return x.name < y.name
 }
 
 // acceptedNote is the line a finding's exception adds beside it.

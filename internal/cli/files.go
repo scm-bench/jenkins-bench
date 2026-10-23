@@ -1,10 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// createTemp is os.CreateTemp; a variable so a test can hand writePrivate a
+// file that refuses writes, the way a full disk does.
+var createTemp = os.CreateTemp
 
 // writePrivate writes data to path with mode 0600, atomically.
 //
@@ -22,7 +27,7 @@ func writePrivate(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	tmp, err := createTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
@@ -33,16 +38,12 @@ func writePrivate(path string, data []byte) error {
 			os.Remove(tmp.Name())
 		}
 	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
+	// Each step runs even if an earlier one failed — harmless, since a
+	// failure means the temporary file is removed rather than renamed — so
+	// every reason it failed is reported together.
+	chmodErr := tmp.Chmod(0o600)
+	_, writeErr := tmp.Write(data)
+	if err := errors.Join(chmodErr, writeErr, tmp.Sync(), tmp.Close()); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {

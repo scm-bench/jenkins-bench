@@ -1,10 +1,17 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/scm-bench/jenkins-bench/internal/console"
 )
 
 func TestExitCodeDistinguishesFindingsFromFailure(t *testing.T) {
@@ -77,5 +84,40 @@ func TestIsTerminalRejectsNonTerminals(t *testing.T) {
 	defer devnull.Close()
 	if isTerminal(devnull) {
 		t.Errorf("%s must not be treated as a terminal", os.DevNull)
+	}
+}
+
+func TestRunSaysWhyItExitedAndWithWhatCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantCode int
+		wantTag  string
+	}{
+		{"success", nil, ExitOK, ""},
+		{"interrupted", context.Canceled, ExitError, "WARN"},
+		{"failure", errors.New("the controller could not be reached"), ExitError, "FAIL"},
+		{"findings", &exitCodeError{code: ExitFindings, msg: "2 controls failed"}, ExitFindings, "INFO"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "x", SilenceErrors: true, SilenceUsage: true,
+				RunE: func(*cobra.Command, []string) error { return tc.err }}
+			root.SetArgs(nil)
+			var buf bytes.Buffer
+			code := Run(context.Background(), root, console.Writer{W: &buf})
+			if code != tc.wantCode {
+				t.Errorf("Run() = %d, want %d", code, tc.wantCode)
+			}
+			if tc.wantTag == "" {
+				if buf.Len() != 0 {
+					t.Errorf("a successful run printed %q", buf.String())
+				}
+				return
+			}
+			if !strings.Contains(buf.String(), tc.wantTag) {
+				t.Errorf("last line = %q, want the %s tag", buf.String(), tc.wantTag)
+			}
+		})
 	}
 }

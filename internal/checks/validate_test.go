@@ -107,3 +107,13 @@ func TestLessCISIDHandlesNonNumericComponents(t *testing.T) {
 		}
 	}
 }
+
+func TestLessCISIDLooksPastAnEqualNonNumericComponent(t *testing.T) {
+	// "x" matches "x", so the numbers after it decide, compared as numbers.
+	if !LessCISID("1.x.9", "1.x.11") {
+		t.Error(`LessCISID("1.x.9", "1.x.11") = false, want true`)
+	}
+	if LessCISID("1.x.11", "1.x.9") {
+		t.Error(`LessCISID("1.x.11", "1.x.9") = true, want false`)
+	}
+}

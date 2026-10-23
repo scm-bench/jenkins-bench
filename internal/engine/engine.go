@@ -5,7 +5,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path"
 	"runtime"
@@ -138,11 +137,18 @@ type Engine struct {
 	selected []checks.Check
 	// now decides which exceptions have lapsed; a field so tests can fix it.
 	now func() time.Time
+	// encode converts a resource to OPA's value form; a field so tests can
+	// make it fail and see that the run stops rather than judging half an input.
+	encode func(any) (ast.Value, error)
 }
+
+// loadBundle is checks.Load; a variable so a test can stand in a bundle that
+// fails to load or holds a broken policy.
+var loadBundle = checks.Load
 
 // New compiles the embedded policies for the given platform and configuration.
 func New(ctx context.Context, cfg config.Config, platform string) (*Engine, error) {
-	bundle, err := checks.Load()
+	bundle, err := loadBundle()
 	if err != nil {
 		return nil, fmt.Errorf("load policy bundle: %w", err)
 	}
@@ -171,6 +177,7 @@ func New(ctx context.Context, cfg config.Config, platform string) (*Engine, erro
 		cfg:      cfg,
 		bundle:   bundle,
 		prepared: make(map[string]rego.PreparedEvalQuery),
+		encode:   toAST,
 	}
 
 	for _, check := range bundle.Checks {
@@ -244,15 +251,15 @@ func validateSelection(cfg config.Config, bundle *checks.Bundle) error {
 // value form once and handed to every control as a parsed input; and jobs are
 // evaluated in parallel, which the prepared queries allow.
 func (e *Engine) Evaluate(ctx context.Context, snapshot *ci.Snapshot) (*Report, error) {
-	cfgValue, err := toAST(e.cfg)
+	cfgValue, err := e.encode(e.cfg)
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
 	}
-	metaValue, err := toAST(snapshot.Metadata)
+	metaValue, err := e.encode(snapshot.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("encode snapshot metadata: %w", err)
 	}
-	controllerValue, err := toAST(snapshot.Controller)
+	controllerValue, err := e.encode(snapshot.Controller)
 	if err != nil {
 		return nil, fmt.Errorf("encode controller: %w", err)
 	}
@@ -402,7 +409,7 @@ func (e *Engine) evaluateJobs(ctx context.Context, jobs []ci.Job, jobChecks []ch
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				value, err := toAST(jobs[i])
+				value, err := e.encode(jobs[i])
 				if err != nil {
 					errOnce.Do(func() { firstErr = fmt.Errorf("encode job %s: %w", jobs[i].FullName, err) })
 					continue
@@ -527,16 +534,12 @@ func decodeResult(value any) (policyResult, error) {
 // toAST converts a Go value into OPA's value form, honouring the json tags
 // that define the snapshot's contract with the rules. Done once per resource:
 // a value handed to Eval as plain maps is converted again on every call.
+//
+// InterfaceToValue round-trips a struct through encoding/json itself (numbers
+// kept exact via json.Number), so the tags are honoured without a second
+// marshal here.
 func toAST(v any) (ast.Value, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var plain any
-	if err := json.Unmarshal(raw, &plain); err != nil {
-		return nil, err
-	}
-	return ast.InterfaceToValue(plain)
+	return ast.InterfaceToValue(v)
 }
 
 // sortFindings orders the report the way it is read: worst first, then by

@@ -20,3 +20,7 @@ jobs:
     uses: scm-bench/.github/.github/workflows/go-bench-ci.yml@main
     with:
       bench: jenkins-bench
+      # Everything reachable is tested, and the floor keeps it that way. The
+      # few statements left uncovered are error returns that cannot fire, such
+      # as json.Marshal of a snapshot struct with no unencodable field.
+      go-coverage-floor: "99.9"

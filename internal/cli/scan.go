@@ -167,10 +167,9 @@ func movedFlagError(cmd *cobra.Command, err error) error {
 }
 
 func runScan(cmd *cobra.Command, opts *scanOptions) error {
+	// Never nil: cobra hands every command context.Background() when the
+	// caller gave it none.
 	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	if err := resolveFormat(cmd, opts); err != nil {
 		return err
@@ -338,20 +337,13 @@ func validFormat(f string) bool {
 func loadScanConfig(opts *scanOptions) (config.Config, string, error) {
 	path := opts.configPath
 	if path == "" {
-		discovered, err := config.Discover()
-		if err != nil {
-			return config.Config{}, "", err
-		}
-		path = discovered
+		path = config.Discover()
 	}
+	// LoadWithOverrides validates, so this is checked at startup rather than
+	// at verdict time: a threshold that silently inverts a control should stop
+	// the run, not change what a report means without saying so.
 	cfg, err := config.LoadWithOverrides(path, opts.sets)
 	if err != nil {
-		return config.Config{}, path, err
-	}
-	// Validated at startup rather than at verdict time: a threshold that
-	// silently inverts a control should stop the run, not change what a report
-	// means without saying so.
-	if err := cfg.Validate(); err != nil {
 		return config.Config{}, path, err
 	}
 	return cfg, path, nil

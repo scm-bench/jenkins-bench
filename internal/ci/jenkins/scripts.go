@@ -58,10 +58,9 @@ func findScripts(body []byte) ([]ci.Script, error) {
 				stack[n-1].text.Write(t)
 			}
 		case xml.EndElement:
+			// The decoder is strict: an end tag always closes a start tag it
+			// returned, so the stack is never empty here.
 			n := len(stack)
-			if n == 0 {
-				continue
-			}
 			f := stack[n-1]
 			stack = stack[:n-1]
 			if f.name == "sandbox" && len(stack) > 0 {
