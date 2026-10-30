@@ -16,6 +16,18 @@
 
 [English](README.md)
 
+<p align="center">
+  <img src="docs/demo.gif" alt="jenkins-bench scan --demo：每条发现附带修复所需的设置路径，最后是得分" width="800">
+</p>
+
+自己试一下，不需要控制器，也不需要 token —— `--demo` 会评估二进制里自带的示例：
+
+```bash
+docker run --rm -t ghcr.io/scm-bench/jenkins-bench:latest scan --demo
+```
+
+<sub>动画由 [`hack/demo.tape`](hack/demo.tape) 用 [vhs](https://github.com/charmbracelet/vhs) 录制。</sub>
+
 jenkins-bench 以**只读**方式捕获控制器的快照 —— 任务、凭据、agent 与插件 ——
 用 Rego 策略逐项评估，然后告诉你哪里配置有误，以及修复它的确切设置路径。
 

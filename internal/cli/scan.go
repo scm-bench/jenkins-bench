@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/scm-bench/jenkins-bench/examples"
 	"github.com/scm-bench/jenkins-bench/internal/ci"
 	"github.com/scm-bench/jenkins-bench/internal/ci/jenkins"
 	"github.com/scm-bench/jenkins-bench/internal/config"
@@ -32,6 +33,7 @@ type scanOptions struct {
 	sets        []string
 	snapshotIn  string
 	snapshotOut string
+	demo        bool
 
 	format         string
 	legacyFormat   string
@@ -80,6 +82,9 @@ up: a folder brings every job under it at any depth, a job brings itself. A
 name the controller does not know — or will not show this token — stops the
 scan with exit 2 rather than reporting on nothing.
 
+No controller yet? --demo evaluates a sample bundled into the binary — no
+network, no token — so you can see what a report looks like first.
+
 --snapshot-out writes the captured snapshot; --snapshot-in evaluates one
 already captured, with no network and no token, which is how a scan run on a
 runner that holds the credentials gets re-examined later.
@@ -112,6 +117,7 @@ token that can read very little is the common case.`,
 	f.StringArrayVar(&opts.sets, "set", nil, "override a config key, e.g. --set scan.failOn=none")
 	f.StringVar(&opts.snapshotIn, "snapshot-in", "", "evaluate a snapshot from disk instead of scanning")
 	f.StringVar(&opts.snapshotOut, "snapshot-out", "", "write the captured snapshot to this path")
+	f.BoolVar(&opts.demo, "demo", false, "evaluate the bundled example instead of a controller, to see what a report looks like")
 	f.StringVarP(&opts.format, "output", "o", report.FormatTable, "report format: "+strings.Join(report.Formats(), ", "))
 	// --format is what v0.1 called it. Kept so a pipeline written against it
 	// does not break on upgrade, hidden so nobody new learns it, and named as
@@ -174,6 +180,18 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 	if err := resolveFormat(cmd, opts); err != nil {
 		return err
 	}
+	if opts.demo {
+		// A typed flag the demo would silently ignore is refused, for the
+		// reason --folder is refused against --snapshot-in: the report would
+		// look like the scan that was asked for and not be it. Values merely
+		// exported in the environment do not count — a JENKINS_URL left in a
+		// shell must not make the demo argue — and are never read.
+		for _, name := range []string{"url", "username", "token", "folder", "job", "snapshot-in"} {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("--demo evaluates the bundled example, so --%s has nothing to act on; drop one of them", name)
+			}
+		}
+	}
 	// Refused rather than ignored: a snapshot already holds a fixed set of
 	// jobs, and a report of all of them that looked like the narrowed scan
 	// asked for would be the wrong answer to the question typed.
@@ -232,7 +250,13 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 	trace := newTracer(stderr, colour, shown == "full")
 	// One self-overwriting line on a terminal, unless every request is
 	// already being printed, or nothing is to be.
-	progress := newProgressWriter(stderr, shown == "compact")
+	// Said on stderr as well as in the table's banner: with stdout redirected
+	// the banner travels with the file and this line stays on the terminal.
+	if opts.demo {
+		console.Writer{W: stderr, P: console.Painter{Enabled: colour}}.
+			Line(console.Info, "evaluating the bundled example; pass --url to scan your own controller")
+	}
+	progress := newProgressWriter(stderr, shown == "compact" && !opts.demo)
 	snapshot, err := obtainSnapshot(ctx, stderr, colour, opts, cfg, trace, progress)
 	progress.clear()
 	if line, tag := trace.summary(); line != "" {
@@ -274,6 +298,9 @@ func runScan(cmd *cobra.Command, opts *scanOptions) error {
 		DetailFilters:  splitFilters(opts.details),
 		MaxResources:   opts.maxResources,
 		ToolVersion:    Version,
+	}
+	if opts.demo {
+		renderOpts.Notice = demoNotice
 	}
 	if opts.outputFile == "" {
 		renderOpts.Width = console.WidthFor(out)
@@ -350,6 +377,9 @@ func loadScanConfig(opts *scanOptions) (config.Config, string, error) {
 }
 
 func obtainSnapshot(ctx context.Context, stderr io.Writer, colour bool, opts *scanOptions, cfg config.Config, trace *tracer, progress *progressWriter) (*ci.Snapshot, error) {
+	if opts.demo {
+		return demoSnapshot()
+	}
 	if opts.snapshotIn != "" {
 		return readSnapshot(opts.snapshotIn)
 	}
@@ -360,7 +390,9 @@ func obtainSnapshot(ctx context.Context, stderr io.Writer, colour bool, opts *sc
 
 	if baseURL == "" {
 		return nil, fmt.Errorf("a controller URL is required: pass --url or set JENKINS_URL\n" +
-			"or evaluate a snapshot you already have with --snapshot-in")
+			"  scan a controller:      jenkins-bench scan --url https://jenkins.example.com --username audit --token \"$JENKINS_TOKEN\"\n" +
+			"  see a sample report:    jenkins-bench scan --demo\n" +
+			"  evaluate a saved file:  jenkins-bench scan --snapshot-in snapshot.json")
 	}
 	if token != "" && username == "" {
 		// An API token is per-user; without the username the client would
@@ -428,6 +460,22 @@ func readSnapshot(path string) (*ci.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot %s: %w", path, err)
 	}
+	return parseSnapshot(body, path)
+}
+
+// demoNotice marks the demo report as example data. It leads the table output,
+// because the header names jenkins.example.com and nothing else would say the
+// tool made that controller up.
+const demoNotice = "EXAMPLE DATA — this report describes the bundled sample controller, not yours. Pass --url to scan your own."
+
+// demoSnapshot decodes the sample compiled into the binary, so the demo works
+// from a release archive with nothing on disk.
+func demoSnapshot() (*ci.Snapshot, error) {
+	return parseSnapshot(examples.SnapshotJSON, "the bundled example")
+}
+
+// parseSnapshot decodes and checks a snapshot; path names it in errors.
+func parseSnapshot(body []byte, path string) (*ci.Snapshot, error) {
 	var snapshot ci.Snapshot
 	if err := json.Unmarshal(body, &snapshot); err != nil {
 		return nil, fmt.Errorf("parse snapshot %s: %w", path, err)
