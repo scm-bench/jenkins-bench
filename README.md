@@ -34,7 +34,7 @@ jenkins-bench scan --url https://jenkins.example.com --username audit --token <a
 [简体中文](README.zh-CN.md)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/scm-bench/jenkins-bench/main/docs/demo.gif" alt="jenkins-bench scan --demo: findings with the settings path to fix each one, then the score" width="800">
+  <img src="docs/demo.gif" alt="jenkins-bench scan --demo: findings with the settings path to fix each one, then the score" width="800">
 </p>
 
 Try it yourself, with no controller and no token — `--demo` evaluates a sample built into the binary:
